@@ -1,0 +1,562 @@
+Metadata-Version: 2.4
+Name: bedrock-prompt-optimizer
+Version: 1.0.0
+Summary: Multi-agent system for optimizing prompts for Amazon Bedrock
+Home-page: https://github.com/example/bedrock-prompt-optimizer
+Author: Bedrock Prompt Optimizer Team
+Author-email: support@example.com
+Maintainer: Bedrock Prompt Optimizer Team
+Maintainer-email: support@example.com
+License: MIT
+Project-URL: Bug Reports, https://github.com/example/bedrock-prompt-optimizer/issues
+Project-URL: Source, https://github.com/example/bedrock-prompt-optimizer
+Project-URL: Documentation, https://bedrock-prompt-optimizer.readthedocs.io/
+Keywords: bedrock,prompt-engineering,ai,llm,optimization,multi-agent,aws,machine-learning,nlp
+Platform: any
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: boto3>=1.26.0
+Requires-Dist: botocore>=1.29.0
+Requires-Dist: pydantic<3.0.0,>=1.10.0
+Requires-Dist: PyYAML>=6.0
+Requires-Dist: rich>=12.0.0
+Requires-Dist: click>=8.0.0
+Requires-Dist: tqdm>=4.64.0
+Requires-Dist: orjson>=3.8.0
+Requires-Dist: python-dateutil>=2.8.0
+Requires-Dist: asyncio-throttle>=1.0.0
+Requires-Dist: aiofiles>=23.0.0
+Requires-Dist: httpx>=0.24.0
+Requires-Dist: structlog>=23.0.0
+Requires-Dist: pathlib2>=2.3.0; python_version < "3.4"
+Requires-Dist: typing-extensions>=4.0.0
+Requires-Dist: dataclasses>=0.6; python_version < "3.7"
+Requires-Dist: isort>=5.12.0
+Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: tenacity>=8.2.0
+Requires-Dist: uuid>=1.30
+Requires-Dist: regex>=2023.0.0
+Requires-Dist: cryptography>=40.0.0
+Requires-Dist: cachetools>=5.3.0
+Requires-Dist: concurrent-futures>=3.1.1; python_version < "3.2"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.21.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
+Requires-Dist: pytest-mock>=3.10.0; extra == "dev"
+Requires-Dist: black>=22.0.0; extra == "dev"
+Requires-Dist: flake8>=5.0.0; extra == "dev"
+Requires-Dist: mypy>=1.0.0; extra == "dev"
+Requires-Dist: isort>=5.12.0; extra == "dev"
+Requires-Dist: bandit>=1.7.0; extra == "dev"
+Requires-Dist: safety>=2.3.0; extra == "dev"
+Provides-Extra: docs
+Requires-Dist: sphinx>=5.0.0; extra == "docs"
+Requires-Dist: sphinx-rtd-theme>=1.2.0; extra == "docs"
+Provides-Extra: profiling
+Requires-Dist: memory-profiler>=0.60.0; extra == "profiling"
+Requires-Dist: line-profiler>=4.0.0; extra == "profiling"
+Provides-Extra: ml
+Requires-Dist: scikit-learn>=1.2.0; extra == "ml"
+Requires-Dist: numpy>=1.24.0; extra == "ml"
+Requires-Dist: nltk>=3.8.0; extra == "ml"
+Provides-Extra: all
+Requires-Dist: pytest>=7.0.0; extra == "all"
+Requires-Dist: pytest-asyncio>=0.21.0; extra == "all"
+Requires-Dist: pytest-cov>=4.0.0; extra == "all"
+Requires-Dist: pytest-mock>=3.10.0; extra == "all"
+Requires-Dist: black>=22.0.0; extra == "all"
+Requires-Dist: flake8>=5.0.0; extra == "all"
+Requires-Dist: mypy>=1.0.0; extra == "all"
+Requires-Dist: isort>=5.12.0; extra == "all"
+Requires-Dist: bandit>=1.7.0; extra == "all"
+Requires-Dist: safety>=2.3.0; extra == "all"
+Requires-Dist: sphinx>=5.0.0; extra == "all"
+Requires-Dist: sphinx-rtd-theme>=1.2.0; extra == "all"
+Requires-Dist: memory-profiler>=0.60.0; extra == "all"
+Requires-Dist: line-profiler>=4.0.0; extra == "all"
+Requires-Dist: scikit-learn>=1.2.0; extra == "all"
+Requires-Dist: numpy>=1.24.0; extra == "all"
+Requires-Dist: nltk>=3.8.0; extra == "all"
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: keywords
+Dynamic: license
+Dynamic: maintainer
+Dynamic: maintainer-email
+Dynamic: platform
+Dynamic: project-url
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+# Bedrock Prompt Optimizer
+
+A comprehensive multi-agent system for iteratively improving prompts for Amazon Bedrock using LLM-powered collaboration, intelligent orchestration, and embedded best practices.
+
+## 🚀 Features
+
+- **Multi-Agent Collaboration**: Specialized agents (Analyzer, Refiner, Validator, Evaluator) work together to optimize prompts
+- **LLM-Powered Orchestration**: Intelligent coordination and conflict resolution using LLM-based decision making
+- **Best Practices Integration**: Curated prompt engineering techniques embedded in agent system prompts
+- **Real-time Bedrock Testing**: Execute prompts against Amazon Bedrock models for immediate feedback
+- **Automated Evaluation**: Multi-criteria assessment with LLM-based quality scoring
+- **Interactive CLI**: User-friendly command-line interface with progress tracking
+- **Session Management**: Persistent history with version tracking and comparison
+- **Configurable Workflows**: Customizable optimization parameters and evaluation criteria
+- **Production Ready**: Docker support, monitoring, logging, and deployment guides
+
+## 📋 Table of Contents
+
+- [Quick Start](#quick-start)
+- [Installation](#installation)
+- [Usage Examples](#usage-examples)
+- [Architecture](#architecture)
+- [Configuration](#configuration)
+- [Documentation](#documentation)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
+
+## ⚡ Quick Start
+
+### Prerequisites
+
+- Python 3.8+
+- AWS credentials configured
+- Access to Amazon Bedrock service
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/example/bedrock-prompt-optimizer.git
+cd bedrock-prompt-optimizer
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Install the package
+pip install -e .
+
+# Run setup
+python cli/setup.py
+```
+
+### Basic Usage
+
+```bash
+# Start an interactive optimization session
+bedrock-optimizer optimize "Explain machine learning to a beginner" --interactive
+
+# Non-interactive optimization with specific parameters
+bedrock-optimizer optimize "Write a product description for a smartphone" \
+  --context "E-commerce product page" \
+  --max-iterations 5 \
+  --model anthropic.claude-3-sonnet-20240229-v1:0
+
+# View optimization history
+bedrock-optimizer history --list
+
+# Configure settings
+bedrock-optimizer config --show
+```
+
+## 🛠 Installation
+
+### From Source
+
+```bash
+git clone https://github.com/example/bedrock-prompt-optimizer.git
+cd bedrock-prompt-optimizer
+pip install -r requirements.txt
+pip install -e .
+```
+
+### Using Docker
+
+```bash
+docker build -t bedrock-optimizer .
+docker run -it --rm \
+  -e AWS_REGION=us-east-1 \
+  -e AWS_ACCESS_KEY_ID=your_key \
+  -e AWS_SECRET_ACCESS_KEY=your_secret \
+  -v $(pwd)/data:/app/data \
+  bedrock-optimizer \
+  bedrock-optimizer optimize "Test prompt"
+```
+
+### Production Deployment
+
+See the [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) for comprehensive production deployment instructions including:
+- Docker and Kubernetes deployments
+- AWS ECS/Fargate configurations
+- Security hardening
+- Monitoring and logging setup
+- Auto-scaling configurations
+
+## 💡 Usage Examples
+
+### Educational Content Optimization
+
+```bash
+bedrock-optimizer optimize \
+  "Explain photosynthesis to a 10-year-old" \
+  --domain education \
+  --complexity medium \
+  --context "Elementary science lesson" \
+  --criteria "clarity,age_appropriateness,engagement"
+```
+
+### Business Communication
+
+```bash
+bedrock-optimizer optimize \
+  "Write an email declining a meeting request" \
+  --domain business \
+  --context "Professional communication" \
+  --output-format "Email template with subject line"
+```
+
+### Technical Documentation
+
+```bash
+bedrock-optimizer optimize \
+  "Document the API endpoint for user authentication" \
+  --domain technical \
+  --complexity high \
+  --context "REST API documentation"
+```
+
+### Continue Existing Session
+
+```bash
+bedrock-optimizer continue abc123 \
+  --feedback "Make it more concise and add examples" \
+  --rating 3
+```
+
+## 🏗 Architecture
+
+The system follows a modular architecture with clear separation of concerns:
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   CLI Interface │    │  Session Manager│    │ History Manager │
+└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
+          │                      │                      │
+          └──────────────────────┼──────────────────────┘
+                                 │
+                    ┌─────────────┴───────────┐
+                    │ LLM Orchestration Engine│
+                    └─────────────┬───────────┘
+                                  │
+        ┌─────────────────────────┼─────────────────────────┐
+        │                         │                         │
+┌───────▼────────┐    ┌───────────▼──────────┐    ┌────────▼────────┐
+│ Agent Ensemble │    │  Bedrock Executor    │    │   Evaluator     │
+│                │    │                      │    │                 │
+│ - Analyzer     │    │ - Model Interface    │    │ - Quality Scorer│
+│ - Refiner      │    │ - Response Handler   │    │ - Comparator    │
+│ - Validator    │    │ - Error Handler      │    │ - Feedback Proc │
+└────────────────┘    └──────────────────────┘    └─────────────────┘
+```
+
+### Key Components
+
+- **LLM Orchestration Engine**: Coordinates agent interactions using intelligent decision-making
+- **Multi-Agent System**: Specialized agents with embedded best practices and reasoning frameworks
+- **Bedrock Executor**: Handles all interactions with Amazon Bedrock API
+- **Evaluation System**: LLM-powered quality assessment with multiple criteria
+- **Best Practices Repository**: Curated prompt engineering techniques and system prompts
+- **Session Management**: Persistent workflow state and history tracking
+
+## ⚙️ Configuration
+
+### Configuration File
+
+The system uses YAML configuration files with comprehensive validation:
+
+```yaml
+bedrock:
+  region: us-east-1
+  default_model: anthropic.claude-3-sonnet-20240229-v1:0
+  timeout: 30
+  max_retries: 3
+
+orchestration:
+  orchestrator_model: anthropic.claude-3-sonnet-20240229-v1:0
+  min_iterations: 3
+  max_iterations: 10
+  score_improvement_threshold: 0.02
+  convergence_confidence_threshold: 0.8
+
+agents:
+  analyzer:
+    enabled: true
+    model: anthropic.claude-3-sonnet-20240229-v1:0
+    temperature: 0.2
+  refiner:
+    enabled: true
+    temperature: 0.4
+  validator:
+    enabled: true
+    temperature: 0.1
+
+storage:
+  path: ./prompt_history
+  format: json
+  backup_enabled: true
+```
+
+### Environment Variables
+
+Override configuration with environment variables:
+
+```bash
+export AWS_REGION=us-west-2
+export BEDROCK_DEFAULT_MODEL=anthropic.claude-3-sonnet-20240229-v1:0
+export OPTIMIZER_MAX_ITERATIONS=15
+export OPTIMIZER_STORAGE_PATH=./my_history
+```
+
+### Runtime Configuration Changes
+
+```bash
+# Modify configuration at runtime
+bedrock-optimizer config --set orchestration.max_iterations=15
+bedrock-optimizer config --set agents.analyzer.temperature=0.3
+
+# Validate configuration
+bedrock-optimizer config --validate
+
+# Backup and restore
+bedrock-optimizer config --backup my-backup
+bedrock-optimizer config --restore my-backup.yaml
+```
+
+## 📚 Documentation
+
+### Comprehensive Guides
+
+- **[CLI Usage Guide](docs/CLI_USAGE.md)**: Complete command-line interface documentation
+- **[Best Practices Guide](docs/BEST_PRACTICES_GUIDE.md)**: Repository structure and customization
+- **[Deployment Guide](docs/DEPLOYMENT_GUIDE.md)**: Production deployment and scaling
+
+### Quick References
+
+- **Commands**: `bedrock-optimizer --help`
+- **Configuration**: `bedrock-optimizer config --help`
+- **Models**: `bedrock-optimizer models --list`
+- **Best Practices**: `bedrock-optimizer best-practices --list`
+
+## 🔧 Development
+
+### Development Setup
+
+```bash
+# Clone repository
+git clone https://github.com/example/bedrock-prompt-optimizer.git
+cd bedrock-prompt-optimizer
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install development dependencies
+pip install -r requirements.txt
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Run linting
+black .
+flake8 .
+mypy .
+```
+
+### Project Structure
+
+```
+bedrock-prompt-optimizer/
+├── agents/                 # Multi-agent system implementation
+├── bedrock/               # Bedrock API integration
+├── best_practices/        # Best practices repository
+├── cli/                   # Command-line interface
+├── docs/                  # Documentation
+├── evaluation/            # Evaluation system
+├── orchestration/         # LLM orchestration engine
+├── storage/               # Data persistence
+├── tests/                 # Test suite
+├── requirements.txt       # Dependencies
+├── setup.py              # Package setup
+└── README.md             # This file
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=. --cov-report=html
+
+# Run specific test categories
+pytest tests/test_agents.py
+pytest tests/test_integration.py
+pytest tests/test_best_practices.py
+
+# Run performance tests
+pytest tests/test_performance.py
+```
+
+### Code Quality
+
+```bash
+# Format code
+black .
+isort .
+
+# Lint code
+flake8 .
+pylint agents/ bedrock/ cli/
+
+# Type checking
+mypy .
+
+# Security scanning
+bandit -r .
+safety check
+```
+
+## 🤝 Contributing
+
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+
+### Development Workflow
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes
+4. Add tests for new functionality
+5. Ensure all tests pass (`pytest`)
+6. Run code quality checks (`black .`, `flake8 .`, `mypy .`)
+7. Commit your changes (`git commit -m 'Add amazing feature'`)
+8. Push to the branch (`git push origin feature/amazing-feature`)
+9. Open a Pull Request
+
+### Reporting Issues
+
+Please use the [GitHub Issues](https://github.com/example/bedrock-prompt-optimizer/issues) page to report bugs or request features.
+
+## 📊 Performance and Monitoring
+
+### Metrics and Monitoring
+
+The system includes comprehensive monitoring capabilities:
+
+- **Performance Metrics**: Response times, throughput, error rates
+- **Usage Analytics**: Session statistics, model usage, optimization patterns
+- **Health Checks**: System health, AWS connectivity, storage status
+- **Audit Logging**: Security events, configuration changes, user actions
+
+### Production Monitoring
+
+```bash
+# Enable metrics collection
+export OPTIMIZER_METRICS_ENABLED=true
+
+# Health check endpoint
+curl http://localhost:8000/health
+
+# Metrics endpoint
+curl http://localhost:8000/metrics
+```
+
+## 🔒 Security
+
+### Security Features
+
+- **Input Validation**: Comprehensive prompt and parameter validation
+- **Data Encryption**: Encryption at rest for sensitive session data
+- **Access Control**: AWS IAM integration and role-based access
+- **Audit Logging**: Complete audit trail of all operations
+- **Secure Configuration**: Environment-based secrets management
+
+### Security Best Practices
+
+- Use IAM roles instead of access keys when possible
+- Enable encryption for sensitive data storage
+- Regularly rotate API keys and credentials
+- Monitor access logs and audit trails
+- Keep dependencies updated for security patches
+
+## 📈 Roadmap
+
+### Current Version (v1.0)
+
+- ✅ Multi-agent prompt optimization
+- ✅ LLM-powered orchestration
+- ✅ Best practices integration
+- ✅ CLI interface
+- ✅ Session management
+- ✅ Configuration system
+
+### Upcoming Features (v1.1)
+
+- 🔄 Web interface and dashboard
+- 🔄 Batch processing capabilities
+- 🔄 Advanced analytics and reporting
+- 🔄 Custom evaluation metrics
+- 🔄 Integration with popular IDEs
+- 🔄 Multi-language support
+
+### Future Enhancements (v2.0)
+
+- 📋 Fine-tuning integration
+- 📋 Collaborative team features
+- 📋 Advanced caching strategies
+- 📋 Real-time optimization streaming
+- 📋 Plugin architecture
+- 📋 Enterprise SSO integration
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Amazon Web Services for the Bedrock platform
+- The prompt engineering community for best practices
+- Contributors and beta testers
+- Open source libraries and tools used in this project
+
+## 📞 Support
+
+- **Documentation**: [https://bedrock-prompt-optimizer.readthedocs.io/](https://bedrock-prompt-optimizer.readthedocs.io/)
+- **GitHub Issues**: [https://github.com/example/bedrock-prompt-optimizer/issues](https://github.com/example/bedrock-prompt-optimizer/issues)
+- **Community Forum**: [https://community.example.com/bedrock-optimizer](https://community.example.com/bedrock-optimizer)
+- **Email Support**: support@example.com
+
+---
+
+**Made with ❤️ by the Bedrock Prompt Optimizer Team**

@@ -1,0 +1,3 @@
+[console_scripts]
+bedrock-optimizer = cli.main:main
+bedrock-prompt-optimizer = cli.main:main

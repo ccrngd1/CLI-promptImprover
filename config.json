@@ -1,0 +1,66 @@
+{
+  "bedrock": {
+    "region": "us-east-1",
+    "profile": null,
+    "default_model": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+    "timeout": 30,
+    "max_retries": 3
+  },
+  "orchestration": {
+    "orchestrator_model": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+    "orchestrator_temperature": 0.3,
+    "orchestrator_max_tokens": 2000,
+    "min_iterations": 3,
+    "max_iterations": 10,
+    "score_improvement_threshold": 0.02,
+    "stability_window": 3,
+    "convergence_confidence_threshold": 0.8
+  },
+  "evaluation": {
+    "default_criteria": [
+      "relevance",
+      "clarity",
+      "completeness"
+    ],
+    "scoring_model": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+    "evaluation_temperature": 0.1,
+    "custom_metrics": {}
+  },
+  "storage": {
+    "path": "./prompt_history",
+    "format": "json",
+    "backup_enabled": true,
+    "max_history_size": 1000
+  },
+  "cli": {
+    "default_interactive": true,
+    "progress_indicators": true,
+    "colored_output": true,
+    "verbose_orchestration": false
+  },
+  "agents": {
+    "analyzer": {
+      "enabled": true,
+      "model": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+      "temperature": 0.2,
+      "max_tokens": 1500
+    },
+    "refiner": {
+      "enabled": true,
+      "model": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+      "temperature": 0.4,
+      "max_tokens": 2000
+    },
+    "validator": {
+      "enabled": true,
+      "model": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+      "temperature": 0.1,
+      "max_tokens": 1000
+    }
+  },
+  "best_practices": {
+    "repository_path": "./best_practices/data",
+    "auto_update": true,
+    "custom_practices_enabled": true
+  }
+}
