@@ -47,6 +47,121 @@ class StructuredFormatter(logging.Formatter):
         return json.dumps(log_entry)
 
 
+class ModeUsageTracker:
+    """Tracker for mode usage and agent selection metrics."""
+    
+    def __init__(self, logger_name: str = 'mode_metrics'):
+        self.logger = logging.getLogger(logger_name)
+        self.mode_usage_stats = {
+            'llm_only': {'count': 0, 'total_time': 0.0, 'agent_bypasses': 0},
+            'hybrid': {'count': 0, 'total_time': 0.0, 'agent_bypasses': 0}
+        }
+        self.agent_selection_stats = {}
+        self.mode_switches = []
+    
+    def track_mode_usage(self, mode: str, execution_time: float, 
+                        bypassed_agents_count: int = 0) -> None:
+        """Track usage statistics for a specific mode."""
+        if mode in self.mode_usage_stats:
+            self.mode_usage_stats[mode]['count'] += 1
+            self.mode_usage_stats[mode]['total_time'] += execution_time
+            self.mode_usage_stats[mode]['agent_bypasses'] += bypassed_agents_count
+            
+            self.logger.debug(
+                f"Mode usage tracked: {mode}",
+                extra={
+                    'mode': mode,
+                    'execution_time': execution_time,
+                    'bypassed_agents_count': bypassed_agents_count,
+                    'total_usage_count': self.mode_usage_stats[mode]['count']
+                }
+            )
+    
+    def track_agent_selection(self, session_id: str, iteration: int,
+                            available_agents: list, selected_agents: list,
+                            mode: str) -> None:
+        """Track agent selection patterns."""
+        selection_key = f"{mode}_{len(available_agents)}_{len(selected_agents)}"
+        
+        if selection_key not in self.agent_selection_stats:
+            self.agent_selection_stats[selection_key] = {
+                'count': 0,
+                'mode': mode,
+                'available_count': len(available_agents),
+                'selected_count': len(selected_agents),
+                'selection_ratio': len(selected_agents) / len(available_agents) if available_agents else 0
+            }
+        
+        self.agent_selection_stats[selection_key]['count'] += 1
+        
+        self.logger.debug(
+            f"Agent selection tracked: {selection_key}",
+            extra={
+                'session_id': session_id,
+                'iteration': iteration,
+                'selection_pattern': selection_key,
+                'available_agents': available_agents,
+                'selected_agents': selected_agents,
+                'mode': mode
+            }
+        )
+    
+    def track_mode_switch(self, old_mode: str, new_mode: str, 
+                         trigger: str = 'configuration_change') -> None:
+        """Track mode switches."""
+        switch_event = {
+            'timestamp': datetime.now().isoformat(),
+            'old_mode': old_mode,
+            'new_mode': new_mode,
+            'trigger': trigger
+        }
+        
+        self.mode_switches.append(switch_event)
+        
+        self.logger.info(
+            f"Mode switch tracked: {old_mode} -> {new_mode}",
+            extra={
+                'old_mode': old_mode,
+                'new_mode': new_mode,
+                'trigger': trigger,
+                'total_switches': len(self.mode_switches)
+            }
+        )
+    
+    def get_usage_summary(self) -> Dict[str, Any]:
+        """Get summary of mode usage statistics."""
+        summary = {
+            'mode_usage': self.mode_usage_stats.copy(),
+            'agent_selection_patterns': self.agent_selection_stats.copy(),
+            'mode_switches': len(self.mode_switches),
+            'recent_switches': self.mode_switches[-5:] if self.mode_switches else []
+        }
+        
+        # Calculate averages
+        for mode, stats in summary['mode_usage'].items():
+            if stats['count'] > 0:
+                stats['avg_execution_time'] = stats['total_time'] / stats['count']
+                stats['avg_bypasses_per_execution'] = stats['agent_bypasses'] / stats['count']
+            else:
+                stats['avg_execution_time'] = 0.0
+                stats['avg_bypasses_per_execution'] = 0.0
+        
+        return summary
+    
+    def log_usage_summary(self) -> None:
+        """Log current usage summary."""
+        summary = self.get_usage_summary()
+        
+        self.logger.info(
+            "Mode usage summary",
+            extra={
+                'usage_summary': summary,
+                'total_executions': sum(stats['count'] for stats in summary['mode_usage'].values()),
+                'total_switches': summary['mode_switches']
+            }
+        )
+
+
 class PerformanceLogger:
     """Logger for performance monitoring and metrics."""
     
@@ -159,6 +274,60 @@ class OrchestrationLogger:
                 'synthesis_reasoning': synthesis_reasoning,
                 'confidence': confidence,
                 'orchestration_decision': 'synthesis'
+            }
+        )
+    
+    def log_agent_bypass(self, session_id: str, iteration: int,
+                        bypassed_agents: list, mode: str, reason: str) -> None:
+        """Log when agents are bypassed due to mode configuration."""
+        self.logger.info(
+            f"Agents bypassed in {mode} mode",
+            extra={
+                'session_id': session_id,
+                'iteration': iteration,
+                'bypassed_agents': bypassed_agents,
+                'bypass_count': len(bypassed_agents),
+                'mode': mode,
+                'reason': reason,
+                'orchestration_decision': 'agent_bypass'
+            }
+        )
+    
+    def log_mode_switch(self, old_mode: str, new_mode: str, 
+                       session_id: Optional[str] = None,
+                       trigger: str = 'configuration_change') -> None:
+        """Log when the orchestration mode changes."""
+        extra_fields = {
+            'old_mode': old_mode,
+            'new_mode': new_mode,
+            'trigger': trigger,
+            'orchestration_decision': 'mode_switch'
+        }
+        
+        if session_id:
+            extra_fields['session_id'] = session_id
+            
+        self.logger.info(
+            f"Mode switched from {old_mode} to {new_mode}",
+            extra=extra_fields
+        )
+    
+    def log_agent_selection_metrics(self, session_id: str, iteration: int,
+                                  available_agents: list, selected_agents: list,
+                                  execution_time: float, mode: str) -> None:
+        """Log metrics about agent selection and execution."""
+        self.logger.info(
+            "Agent selection metrics",
+            extra={
+                'session_id': session_id,
+                'iteration': iteration,
+                'available_agents': available_agents,
+                'selected_agents': selected_agents,
+                'available_count': len(available_agents),
+                'selected_count': len(selected_agents),
+                'execution_time': execution_time,
+                'mode': mode,
+                'orchestration_decision': 'agent_selection_metrics'
             }
         )
 
@@ -305,3 +474,4 @@ def log_exception(logger: logging.Logger, exception: Exception,
 # Global instances for easy access
 performance_logger = PerformanceLogger()
 orchestration_logger = OrchestrationLogger()
+mode_usage_tracker = ModeUsageTracker()

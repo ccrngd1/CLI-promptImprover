@@ -60,12 +60,32 @@
     "custom_practices_enabled": true
   },
   "optimization": {
+    // LLM-Only Mode Configuration
+    // Set to true to bypass heuristic agents and use only LLM-based optimization
     "llm_only_mode": false,
+    
+    // Enable fallback to heuristic agents if LLM agents fail
+    // Recommended: true for production environments
     "fallback_to_heuristic": true,
+    
+    // Enable cost monitoring and tracking for LLM API usage
+    // Useful for budget management in production
     "cost_monitoring": false,
+    
+    // Enable rate limiting to prevent API quota exhaustion
+    // Recommended: true for high-volume usage
     "rate_limiting": false,
+    
+    // Maximum number of concurrent LLM API calls
+    // Adjust based on your API limits and performance requirements
     "max_concurrent_llm_calls": 10,
+    
+    // Timeout for LLM API calls in seconds
+    // LLM calls may take longer than heuristic processing
     "llm_timeout": 300,
+    
+    // Enable caching of LLM responses to reduce costs and improve performance
+    // Recommended: true for repeated similar prompts
     "cache_llm_responses": true
   }
 }

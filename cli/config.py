@@ -207,6 +207,10 @@ class ConfigManager:
                 'repository_path': './best_practices/data',
                 'auto_update': True,
                 'custom_practices_enabled': True
+            },
+            'optimization': {
+                'llm_only_mode': False,
+                'fallback_to_heuristic': True
             }
         }
     
@@ -284,6 +288,9 @@ class ConfigManager:
         
         # Validate best practices configuration
         self._validate_best_practices_config(config.get('best_practices', {}), validation_results)
+        
+        # Validate optimization configuration
+        self._validate_optimization_config(config.get('optimization', {}), validation_results)
         
         # Check for environment variable overrides
         self._check_environment_overrides(validation_results)
@@ -439,6 +446,36 @@ class ConfigManager:
             results['errors'].append(f"Cannot create best practices repository path: {e}")
             results['valid'] = False
     
+    def _validate_optimization_config(self, opt_config: Dict[str, Any], results: Dict[str, Any]) -> None:
+        """Validate optimization-specific configuration."""
+        # Validate llm_only_mode parameter
+        llm_only_mode = opt_config.get('llm_only_mode', False)
+        if not isinstance(llm_only_mode, bool):
+            results['errors'].append(f"Invalid llm_only_mode value: {llm_only_mode}. Must be true or false")
+            results['valid'] = False
+        else:
+            if llm_only_mode:
+                results['info'].append("LLM-only mode is enabled - heuristic agents will be bypassed")
+            else:
+                results['info'].append("Hybrid mode is enabled - using both LLM and heuristic agents")
+        
+        # Validate fallback_to_heuristic parameter
+        fallback_to_heuristic = opt_config.get('fallback_to_heuristic', True)
+        if not isinstance(fallback_to_heuristic, bool):
+            results['errors'].append(f"Invalid fallback_to_heuristic value: {fallback_to_heuristic}. Must be true or false")
+            results['valid'] = False
+        else:
+            if llm_only_mode and not fallback_to_heuristic:
+                results['warnings'].append("LLM-only mode with fallback disabled may cause failures if LLM services are unavailable")
+            elif llm_only_mode and fallback_to_heuristic:
+                results['info'].append("Fallback to heuristic agents enabled for LLM failures")
+        
+        # Check for unknown optimization parameters
+        known_params = {'llm_only_mode', 'fallback_to_heuristic'}
+        unknown_params = set(opt_config.keys()) - known_params
+        if unknown_params:
+            results['warnings'].append(f"Unknown optimization parameters: {', '.join(unknown_params)}")
+    
     def _check_environment_overrides(self, results: Dict[str, Any]) -> None:
         """Check for active environment variable overrides."""
         env_vars = [
@@ -468,6 +505,7 @@ class ConfigManager:
             'valid': True,
             'errors': [],
             'warnings': [],
+            'info': [],
             'safe_to_apply': True
         }
         
@@ -489,6 +527,8 @@ class ConfigManager:
                 self._validate_agent_change(key, value, validation_results)
             elif key.startswith('evaluation.'):
                 self._validate_evaluation_change(key, value, validation_results)
+            elif key.startswith('optimization.'):
+                self._validate_optimization_change(key, value, validation_results)
         
         return validation_results
     
@@ -521,6 +561,19 @@ class ConfigManager:
         if key.endswith('.evaluation_temperature') and (not isinstance(value, (int, float)) or value < 0 or value > 1):
             results['errors'].append(f"Invalid evaluation temperature: {value}")
             results['valid'] = False
+    
+    def _validate_optimization_change(self, key: str, value: Any, results: Dict[str, Any]) -> None:
+        """Validate optimization configuration changes."""
+        if key.endswith('.llm_only_mode') and not isinstance(value, bool):
+            results['errors'].append(f"Invalid llm_only_mode value: {value}. Must be true or false")
+            results['valid'] = False
+        elif key.endswith('.fallback_to_heuristic') and not isinstance(value, bool):
+            results['errors'].append(f"Invalid fallback_to_heuristic value: {value}. Must be true or false")
+            results['valid'] = False
+        elif key.endswith('.llm_only_mode') and value:
+            results['warnings'].append("Enabling LLM-only mode will bypass heuristic agents")
+        elif key.endswith('.llm_only_mode') and not value:
+            results['info'].append("Disabling LLM-only mode will enable hybrid agent processing")
     
     def get_aws_config(self) -> Dict[str, Any]:
         """
@@ -653,12 +706,101 @@ class ConfigManager:
             except Exception as e:
                 results['failed_changes'].append({
                     'key': key,
-                    'value': value,
                     'error': str(e)
                 })
                 results['success'] = False
         
         return results
+    
+    def reload_config(self) -> Dict[str, Any]:
+        """
+        Reload configuration from file and return reload results.
+        
+        Returns:
+            Dictionary with reload results and any errors
+        """
+        reload_results = {
+            'success': True,
+            'reloaded': False,
+            'changes_detected': [],
+            'errors': [],
+            'warnings': []
+        }
+        
+        try:
+            # Store current config for comparison
+            old_config = self.config_data.copy()
+            
+            # Reload from file
+            self._load_config()
+            
+            # Compare configurations to detect changes
+            changes = self._detect_config_changes(old_config, self.config_data)
+            
+            if changes:
+                reload_results['reloaded'] = True
+                reload_results['changes_detected'] = changes
+                
+                # Validate the reloaded configuration
+                validation = self.validate_config()
+                if not validation['valid']:
+                    reload_results['errors'].extend(validation['errors'])
+                    reload_results['success'] = False
+                
+                if validation['warnings']:
+                    reload_results['warnings'].extend(validation['warnings'])
+            
+        except Exception as e:
+            reload_results['success'] = False
+            reload_results['errors'].append(f"Failed to reload configuration: {str(e)}")
+        
+        return reload_results
+    
+    def _detect_config_changes(self, old_config: Dict[str, Any], new_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Detect changes between old and new configuration.
+        
+        Args:
+            old_config: Previous configuration
+            new_config: New configuration
+            
+        Returns:
+            List of detected changes
+        """
+        changes = []
+        
+        def compare_nested(old_dict, new_dict, prefix=""):
+            for key, new_value in new_dict.items():
+                full_key = f"{prefix}.{key}" if prefix else key
+                
+                if key not in old_dict:
+                    changes.append({
+                        'type': 'added',
+                        'key': full_key,
+                        'new_value': new_value
+                    })
+                elif isinstance(new_value, dict) and isinstance(old_dict[key], dict):
+                    compare_nested(old_dict[key], new_value, full_key)
+                elif old_dict[key] != new_value:
+                    changes.append({
+                        'type': 'modified',
+                        'key': full_key,
+                        'old_value': old_dict[key],
+                        'new_value': new_value
+                    })
+            
+            # Check for removed keys
+            for key in old_dict:
+                if key not in new_dict:
+                    full_key = f"{prefix}.{key}" if prefix else key
+                    changes.append({
+                        'type': 'removed',
+                        'key': full_key,
+                        'old_value': old_dict[key]
+                    })
+        
+        compare_nested(old_config, new_config)
+        return changes
     
     def get_runtime_changeable_keys(self) -> List[str]:
         """
@@ -689,7 +831,9 @@ class ConfigManager:
             'cli.progress_indicators',
             'cli.colored_output',
             'best_practices.auto_update',
-            'best_practices.custom_practices_enabled'
+            'best_practices.custom_practices_enabled',
+            'optimization.llm_only_mode',
+            'optimization.fallback_to_heuristic'
         ]
     
     def backup_config(self, backup_name: Optional[str] = None) -> str:
@@ -893,6 +1037,11 @@ best_practices:
   repository_path: ./best_practices/data  # Path to best practices repository
   auto_update: true                    # Auto-update best practices
   custom_practices_enabled: true      # Enable custom practices
+
+# Optimization Configuration
+optimization:
+  llm_only_mode: false                 # Use only LLM agents (bypass heuristic agents)
+  fallback_to_heuristic: true         # Fallback to heuristic agents if LLM fails
 """
     
     with open(sample_path, 'w') as f:

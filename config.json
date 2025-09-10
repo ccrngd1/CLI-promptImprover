@@ -62,5 +62,9 @@
     "repository_path": "./best_practices/data",
     "auto_update": true,
     "custom_practices_enabled": true
+  },
+  "optimization": {
+    "llm_only_mode": false,
+    "fallback_to_heuristic": true
   }
 }

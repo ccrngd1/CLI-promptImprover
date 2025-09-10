@@ -534,6 +534,70 @@ def generate_educational_prompt(age_group, subject, complexity):
     )
 ```
 
+## LLM-Only Mode
+
+The Bedrock Prompt Optimizer supports an LLM-only mode that bypasses all heuristic agents and relies exclusively on LLM-based optimization. This mode is useful when heuristic algorithms may be degrading prompt quality compared to the original input.
+
+### Configuration
+
+Enable LLM-only mode in your configuration:
+
+```json
+{
+  "optimization": {
+    "llm_only_mode": true,
+    "fallback_to_heuristic": true
+  }
+}
+```
+
+### When to Use LLM-Only Mode
+
+- **Quality Issues**: When heuristic agents are producing lower quality results than expected
+- **Domain Expertise**: For specialized domains where LLM reasoning outperforms rule-based approaches
+- **Complex Reasoning**: When prompts require sophisticated understanding that benefits from LLM capabilities
+- **Consistency**: When you need consistent LLM-based improvements across all optimization steps
+
+### Performance Considerations
+
+**Advantages:**
+- Higher quality results for complex prompts
+- Better understanding of context and nuance
+- Consistent reasoning approach across all agents
+- Improved handling of domain-specific content
+
+**Trade-offs:**
+- Higher latency due to additional API calls
+- Increased token usage and associated costs
+- Dependency on LLM service availability
+- Potential for rate limiting with high usage
+
+### Best Practices for LLM-Only Mode
+
+1. **Cost Management**: Monitor token usage and implement caching for similar prompts
+2. **Fallback Strategy**: Enable fallback to heuristic agents for reliability
+3. **Quality Monitoring**: Track performance metrics to validate improvement
+4. **Rate Limiting**: Implement appropriate rate limiting for API calls
+
+### Example Usage
+
+```python
+# Configure LLM-only mode programmatically
+config = {
+    "optimization": {
+        "llm_only_mode": True,
+        "fallback_to_heuristic": True
+    },
+    "orchestration": {
+        "max_iterations": 5  # Reduce iterations to manage costs
+    }
+}
+
+# Initialize with LLM-only configuration
+optimizer = BedrockPromptOptimizer(config)
+result = optimizer.optimize("Your complex prompt here")
+```
+
 ## Advanced Usage
 
 ### Dynamic Rule Loading

@@ -14,6 +14,7 @@ from datetime import datetime
 
 from agents.base import AgentResult
 from agents.ensemble import AgentEnsemble, EnsembleResult
+from agents.factory import AgentFactory
 from agents.llm_enhanced_analyzer import LLMAnalyzerAgent
 from agents.llm_enhanced_refiner import LLMRefinerAgent
 from agents.llm_enhanced_validator import LLMValidatorAgent
@@ -26,7 +27,7 @@ from error_handling import (
     OrchestrationError, AgentError, TimeoutError, handle_orchestration_errors,
     with_retry, RetryConfig, global_error_handler, ErrorSeverity
 )
-from logging_config import get_logger, orchestration_logger, performance_logger, log_exception
+from logging_config import get_logger, orchestration_logger, performance_logger, mode_usage_tracker, log_exception
 
 
 @dataclass
@@ -118,7 +119,13 @@ class LLMOrchestrationEngine:
         """
         self.bedrock_executor = bedrock_executor
         self.evaluator = evaluator
+        
+        # Initialize logger first
+        self.logger = get_logger('orchestration')
+        
+        # Initialize configuration - avoid circular import by lazy loading config_loader
         self.config = config or {}
+        self.config_loader = None  # Will be initialized on first use
         
         # Initialize components
         self.best_practices_repo = BestPracticesRepository()
@@ -127,37 +134,83 @@ class LLMOrchestrationEngine:
         # Initialize agent ensemble
         self.agent_ensemble = AgentEnsemble()
         
-        # Initialize LLM-enhanced agents
-        self.llm_agents = {
-            'analyzer': LLMAnalyzerAgent(),
-            'refiner': LLMRefinerAgent(), 
-            'validator': LLMValidatorAgent()
-        }
+        # Initialize agent factory for mode-based agent creation
+        self.agent_factory = AgentFactory(self.config)
         
-        # Orchestration configuration
+        # Create agents based on configuration mode
+        try:
+            self.agents = self.agent_factory.create_agents()
+        except Exception as e:
+            self.logger.error(f"Failed to create agents: {str(e)}")
+            # Try to create emergency fallback agents if possible
+            if self.agent_factory.fallback_to_heuristic:
+                self.logger.warning("Attempting to create emergency fallback agents")
+                try:
+                    self.agents = self.agent_factory.create_emergency_fallback_agents()
+                except Exception as fallback_error:
+                    self.logger.error(f"Failed to create emergency fallback agents: {str(fallback_error)}")
+                    raise Exception(f"Failed to create any agents. Original error: {str(e)}, Fallback error: {str(fallback_error)}")
+            else:
+                raise
+        
+        # Extract optimization configuration
+        self.optimization_config = self.config.get('optimization', {})
+        self.llm_only_mode = self.optimization_config.get('llm_only_mode', False)
+        
+        # Log agent initialization
+        self.logger.info(
+            f"Orchestration engine initialized in {self.agent_factory.get_mode_description()}",
+            extra={
+                'mode': 'llm_only' if self.llm_only_mode else 'hybrid',
+                'available_agents': list(self.agents.keys()),
+                'bypassed_agents': self.agent_factory.get_bypassed_agents()
+            }
+        )
+        
+        # Log bypassed agents if in LLM-only mode
+        if self.llm_only_mode:
+            bypassed_agents = self.agent_factory.get_bypassed_agents()
+            if bypassed_agents:
+                self.logger.info(
+                    f"LLM-only mode active: bypassing {len(bypassed_agents)} heuristic agents",
+                    extra={'bypassed_agents': bypassed_agents}
+                )
+                
+                # Log agent bypass with orchestration logger
+                orchestration_logger.log_agent_bypass(
+                    session_id='initialization',
+                    iteration=0,
+                    bypassed_agents=bypassed_agents,
+                    mode='llm_only',
+                    reason='llm_only_mode_configuration'
+                )
+        
+        # Orchestration configuration - use orchestration section for orchestrator settings
+        orchestration_config = self.config.get('orchestration', {})
         self.orchestrator_model_config = ModelConfig(
-            model_id=self.config.get('orchestrator_model', 'anthropic.claude-3-sonnet-20240229-v1:0'),
-            temperature=self.config.get('orchestrator_temperature', 0.3),
-            max_tokens=self.config.get('orchestrator_max_tokens', 2000)
+            model_id=orchestration_config.get('orchestrator_model', 'anthropic.claude-3-sonnet-20240229-v1:0'),
+            temperature=orchestration_config.get('orchestrator_temperature', 0.3),
+            max_tokens=orchestration_config.get('orchestrator_max_tokens', 2000)
         )
         
         # Convergence criteria
         self.convergence_config = {
-            'min_iterations': self.config.get('min_iterations', 3),
-            'max_iterations': self.config.get('max_iterations', 10),
-            'score_improvement_threshold': self.config.get('score_improvement_threshold', 0.02),
-            'stability_window': self.config.get('stability_window', 3),
-            'convergence_confidence_threshold': self.config.get('convergence_confidence_threshold', 0.8)
+            'min_iterations': orchestration_config.get('min_iterations', 3),
+            'max_iterations': orchestration_config.get('max_iterations', 10),
+            'score_improvement_threshold': orchestration_config.get('score_improvement_threshold', 0.02),
+            'stability_window': orchestration_config.get('stability_window', 3),
+            'convergence_confidence_threshold': orchestration_config.get('convergence_confidence_threshold', 0.8)
         }
         
         # Execution tracking
         self.orchestration_history = []
         
-        # Initialize logger
-        self.logger = get_logger('orchestration')
-        
         # Initialize error recovery strategies
         self._setup_error_recovery()
+        
+        # Track LLM failure count for fallback decisions
+        self._llm_failure_count = 0
+        self._max_llm_failures = 3  # Maximum consecutive LLM failures before switching to fallback
     
     @handle_orchestration_errors
     @with_retry(RetryConfig(max_attempts=2, base_delay=1.0))
@@ -345,6 +398,14 @@ class LLMOrchestrationEngine:
             # Track orchestration history
             self.orchestration_history.append(result.to_dict())
             
+            # Track mode usage metrics
+            bypassed_agents = self.agent_factory.get_bypassed_agents()
+            mode_usage_tracker.track_mode_usage(
+                mode='llm_only' if self.llm_only_mode else 'hybrid',
+                execution_time=processing_time,
+                bypassed_agents_count=len(bypassed_agents)
+            )
+            
             # End performance tracking
             performance_logger.end_timer(
                 f'orchestration_iteration_{session_id}_{iteration}',
@@ -413,22 +474,344 @@ class LLMOrchestrationEngine:
             self.orchestration_history.append(error_result.to_dict())
             
             return error_result
+    
+    def _setup_error_recovery(self):
+        """Setup error recovery strategies for LLM failures."""
+        self.error_recovery_strategies = {
+            'llm_service_unavailable': self._handle_llm_service_unavailable,
+            'llm_timeout': self._handle_llm_timeout,
+            'llm_rate_limit': self._handle_llm_rate_limit,
+            'agent_failure': self._handle_agent_failure
+        }
+    
+    def _handle_llm_service_unavailable(self, error_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle LLM service unavailability.
+        
+        Args:
+            error_context: Context about the error
+            
+        Returns:
+            Recovery strategy result
+        """
+        self.logger.warning("LLM service unavailable, attempting fallback strategy")
+        
+        # Increment failure count
+        self._llm_failure_count += 1
+        
+        # If fallback is enabled and we haven't exceeded max failures
+        if (self.agent_factory.fallback_to_heuristic and 
+            self._llm_failure_count <= self._max_llm_failures):
+            
+            try:
+                # Create fallback agents
+                fallback_agents = self.agent_factory.handle_llm_service_unavailable()
+                
+                # Update current agents with fallback agents
+                self.agents.update(fallback_agents)
+                
+                self.logger.info(f"Successfully created fallback agents after {self._llm_failure_count} LLM failures")
+                
+                return {
+                    'success': True,
+                    'strategy': 'fallback_agents',
+                    'agents_created': list(fallback_agents.keys()),
+                    'failure_count': self._llm_failure_count
+                }
+                
+            except Exception as e:
+                self.logger.error(f"Failed to create fallback agents: {str(e)}")
+                return {
+                    'success': False,
+                    'strategy': 'fallback_agents',
+                    'error': str(e),
+                    'failure_count': self._llm_failure_count
+                }
+        else:
+            self.logger.error(f"LLM service unavailable and fallback not available or max failures exceeded ({self._llm_failure_count})")
+            return {
+                'success': False,
+                'strategy': 'no_fallback',
+                'error': 'LLM service unavailable and no fallback strategy available',
+                'failure_count': self._llm_failure_count
+            }
+    
+    def _handle_llm_timeout(self, error_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle LLM timeout errors."""
+        self.logger.warning("LLM timeout detected, attempting retry with fallback")
+        return self._handle_llm_service_unavailable(error_context)
+    
+    def _handle_llm_rate_limit(self, error_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle LLM rate limit errors."""
+        self.logger.warning("LLM rate limit exceeded, attempting fallback")
+        return self._handle_llm_service_unavailable(error_context)
+    
+    def _handle_agent_failure(self, error_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle individual agent failures."""
+        agent_name = error_context.get('agent_name', 'unknown')
+        error_message = error_context.get('error', 'unknown error')
+        
+        self.logger.warning(f"Agent {agent_name} failed: {error_message}")
+        
+        # If this is an LLM agent and fallback is enabled
+        if (agent_name in ['analyzer', 'refiner', 'validator'] and 
+            self.agent_factory.fallback_to_heuristic and
+            self.llm_only_mode):
+            
+            try:
+                # Create fallback agent for this specific agent
+                fallback_agents = self.agent_factory._create_fallback_agents_for_failed([(agent_name, error_message)])
+                
+                if fallback_agents:
+                    # Replace the failed agent with fallback
+                    self.agents.update(fallback_agents)
+                    
+                    self.logger.info(f"Successfully created fallback agent for {agent_name}")
+                    
+                    return {
+                        'success': True,
+                        'strategy': 'individual_fallback',
+                        'agent_name': agent_name,
+                        'fallback_created': True
+                    }
+                
+            except Exception as e:
+                self.logger.error(f"Failed to create fallback agent for {agent_name}: {str(e)}")
+        
+        return {
+            'success': False,
+            'strategy': 'individual_fallback',
+            'agent_name': agent_name,
+            'error': error_message
+        }
+    
+    def _reset_llm_failure_count(self):
+        """Reset LLM failure count after successful operation."""
+        if self._llm_failure_count > 0:
+            self.logger.info(f"Resetting LLM failure count from {self._llm_failure_count} to 0")
+            self._llm_failure_count = 0
+    
+    def _get_config_loader(self):
+        """Get config loader with lazy initialization to avoid circular imports."""
+        if self.config_loader is None:
+            from config_loader import get_config_loader
+            self.config_loader = get_config_loader()
+            self.config_loader.add_change_listener(self._handle_config_change)
+        return self.config_loader
+    
+    def _handle_config_change(self, event):
+        """
+        Handle configuration changes at runtime.
+        
+        Args:
+            event: Configuration change event
+        """
+        if not event.success:
+            self.logger.warning(f"Configuration change failed: {event.errors}")
+            return
+        
+        self.logger.info(
+            f"Processing configuration change from {event.source}",
+            extra={
+                'change_count': len(event.changes),
+                'source': event.source,
+                'timestamp': event.timestamp.isoformat()
+            }
+        )
+        
+        # Check for optimization-related changes
+        optimization_changes = [
+            change for change in event.changes
+            if isinstance(change, dict) and change.get('key', '').startswith('optimization.')
+        ]
+        
+        if optimization_changes:
+            self._handle_optimization_config_changes(optimization_changes)
+        
+        # Check for orchestration-related changes
+        orchestration_changes = [
+            change for change in event.changes
+            if isinstance(change, dict) and change.get('key', '').startswith('orchestration.')
+        ]
+        
+        if orchestration_changes:
+            self._handle_orchestration_config_changes(orchestration_changes)
+        
+        # Update local config reference
+        self.config = self.config_loader.get_config()
+    
+    def _handle_optimization_config_changes(self, changes: List[Dict[str, Any]]):
+        """
+        Handle optimization configuration changes.
+        
+        Args:
+            changes: List of optimization configuration changes
+        """
+        for change in changes:
+            key = change.get('key', '')
+            new_value = change.get('new_value')
+            old_value = change.get('old_value')
+            
+            if key == 'optimization.llm_only_mode':
+                self._handle_llm_only_mode_change(new_value, old_value)
+            elif key == 'optimization.fallback_to_heuristic':
+                self._handle_fallback_config_change(new_value, old_value)
+    
+    def _handle_llm_only_mode_change(self, new_value: bool, old_value: bool):
+        """
+        Handle LLM-only mode configuration change.
+        
+        Args:
+            new_value: New LLM-only mode value
+            old_value: Previous LLM-only mode value
+        """
+        if new_value == old_value:
+            return
+        
+        self.logger.info(
+            f"LLM-only mode changed: {old_value} -> {new_value}",
+            extra={
+                'old_mode': 'llm_only' if old_value else 'hybrid',
+                'new_mode': 'llm_only' if new_value else 'hybrid'
+            }
+        )
+        
+        # Update local configuration
+        self.optimization_config = self.config.get('optimization', {})
+        self.llm_only_mode = new_value
+        
+        # Recreate agent factory with new configuration
+        try:
+            old_agent_factory = self.agent_factory
+            self.agent_factory = AgentFactory(self.config)
+            
+            # Recreate agents with new mode
+            old_agents = self.agents
+            self.agents = self.agent_factory.create_agents()
+            
+            # Log the change
+            bypassed_agents = self.agent_factory.get_bypassed_agents()
+            self.logger.info(
+                f"Agents recreated for mode change: {len(self.agents)} active, {len(bypassed_agents)} bypassed",
+                extra={
+                    'active_agents': list(self.agents.keys()),
+                    'bypassed_agents': bypassed_agents,
+                    'new_mode': 'llm_only' if new_value else 'hybrid'
+                }
+            )
+            
+            # Log agent bypass if switching to LLM-only mode
+            if new_value and bypassed_agents:
+                orchestration_logger.log_agent_bypass(
+                    session_id='runtime_config_change',
+                    iteration=0,
+                    bypassed_agents=bypassed_agents,
+                    mode='llm_only',
+                    reason='runtime_llm_only_mode_enabled'
+                )
             
         except Exception as e:
-            return OrchestrationResult(
-                success=False,
-                orchestrated_prompt=prompt,
-                agent_results={},
-                execution_result=None,
-                evaluation_result=None,
-                conflict_resolutions=[],
-                synthesis_reasoning="Orchestration failed due to exception",
-                orchestration_decisions=[],
-                convergence_analysis=None,
-                processing_time=time.time() - start_time,
-                llm_orchestrator_confidence=0.0,
-                error_message=f"Orchestration error: {str(e)}"
+            self.logger.error(f"Failed to recreate agents after mode change: {str(e)}")
+            # Restore previous agents if possible
+            self.agents = old_agents if 'old_agents' in locals() else self.agents
+            self.agent_factory = old_agent_factory if 'old_agent_factory' in locals() else self.agent_factory
+            raise
+    
+    def _handle_fallback_config_change(self, new_value: bool, old_value: bool):
+        """
+        Handle fallback configuration change.
+        
+        Args:
+            new_value: New fallback configuration value
+            old_value: Previous fallback configuration value
+        """
+        if new_value == old_value:
+            return
+        
+        self.logger.info(
+            f"Fallback configuration changed: {old_value} -> {new_value}",
+            extra={
+                'fallback_enabled': new_value,
+                'llm_only_mode': self.llm_only_mode
+            }
+        )
+        
+        # Update agent factory configuration
+        self.agent_factory.fallback_to_heuristic = new_value
+        
+        # Log warning if LLM-only mode is enabled without fallback
+        if self.llm_only_mode and not new_value:
+            self.logger.warning(
+                "LLM-only mode is enabled without fallback - system may fail if LLM services are unavailable"
             )
+    
+    def _handle_orchestration_config_changes(self, changes: List[Dict[str, Any]]):
+        """
+        Handle orchestration configuration changes.
+        
+        Args:
+            changes: List of orchestration configuration changes
+        """
+        orchestration_config = self.config.get('orchestration', {})
+        config_updated = False
+        
+        for change in changes:
+            key = change.get('key', '')
+            new_value = change.get('new_value')
+            
+            if key.startswith('orchestration.orchestrator_'):
+                # Update orchestrator model configuration
+                self.orchestrator_model_config = ModelConfig(
+                    model_id=orchestration_config.get('orchestrator_model', self.orchestrator_model_config.model_id),
+                    temperature=orchestration_config.get('orchestrator_temperature', self.orchestrator_model_config.temperature),
+                    max_tokens=orchestration_config.get('orchestrator_max_tokens', self.orchestrator_model_config.max_tokens)
+                )
+                config_updated = True
+                
+            elif key.startswith('orchestration.') and any(param in key for param in ['min_iterations', 'max_iterations', 'threshold', 'window']):
+                # Update convergence configuration
+                self.convergence_config.update({
+                    'min_iterations': orchestration_config.get('min_iterations', self.convergence_config['min_iterations']),
+                    'max_iterations': orchestration_config.get('max_iterations', self.convergence_config['max_iterations']),
+                    'score_improvement_threshold': orchestration_config.get('score_improvement_threshold', self.convergence_config['score_improvement_threshold']),
+                    'stability_window': orchestration_config.get('stability_window', self.convergence_config['stability_window']),
+                    'convergence_confidence_threshold': orchestration_config.get('convergence_confidence_threshold', self.convergence_config['convergence_confidence_threshold'])
+                })
+                config_updated = True
+        
+        if config_updated:
+            self.logger.info(
+                "Orchestration configuration updated at runtime",
+                extra={
+                    'orchestrator_model': self.orchestrator_model_config.model_id,
+                    'convergence_config': self.convergence_config
+                }
+            )
+    
+    def reload_configuration(self) -> Dict[str, Any]:
+        """
+        Manually reload configuration from file.
+        
+        Returns:
+            Results of the configuration reload
+        """
+        self.logger.info("Manually reloading configuration")
+        config_loader = self._get_config_loader()
+        return config_loader.reload_from_file()
+    
+    def update_configuration(self, changes: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update configuration at runtime.
+        
+        Args:
+            changes: Dictionary of configuration changes
+            
+        Returns:
+            Results of the configuration update
+        """
+        self.logger.info(f"Updating configuration: {list(changes.keys())}")
+        config_loader = self._get_config_loader()
+        return config_loader.update_config(changes)
     
     def _coordinate_agent_analysis(self,
                                  prompt: str,
@@ -437,6 +820,7 @@ class LLMOrchestrationEngine:
                                  feedback: Optional[UserFeedback]) -> Dict[str, Any]:
         """
         Coordinate agent analysis using LLM-based orchestration decisions.
+        Filters agents based on configuration mode (LLM-only vs hybrid).
         
         Args:
             prompt: The prompt to analyze
@@ -447,8 +831,10 @@ class LLMOrchestrationEngine:
         Returns:
             Dictionary containing coordination results
         """
+        coordination_start_time = time.time()
+        
         try:
-            # Determine which agents to use based on LLM orchestration
+            # Determine which agents to use based on LLM orchestration and mode
             agent_selection = self._determine_agent_execution_order(
                 prompt, context, history, feedback
             )
@@ -459,27 +845,196 @@ class LLMOrchestrationEngine:
                     'error': 'Failed to determine agent execution strategy'
                 }
             
+            # Filter execution order based on available agents in current mode
+            available_agents = list(self.agents.keys())
+            filtered_execution_order = [
+                agent_name for agent_name in agent_selection['execution_order']
+                if agent_name in available_agents
+            ]
+            
+            # Log agent filtering if any agents were filtered out
+            original_order = agent_selection['execution_order']
+            if len(filtered_execution_order) != len(original_order):
+                filtered_out = [agent for agent in original_order if agent not in filtered_execution_order]
+                self.logger.debug(
+                    f"Filtered out {len(filtered_out)} agents not available in current mode",
+                    extra={
+                        'mode': 'llm_only' if self.llm_only_mode else 'hybrid',
+                        'filtered_out_agents': filtered_out,
+                        'available_agents': available_agents
+                    }
+                )
+                
+                # Log agent bypass with orchestration logger
+                session_id = context.get('session_id', 'unknown') if context else 'unknown'
+                iteration = len(history) + 1 if history else 1
+                orchestration_logger.log_agent_bypass(
+                    session_id=session_id,
+                    iteration=iteration,
+                    bypassed_agents=filtered_out,
+                    mode='llm_only' if self.llm_only_mode else 'hybrid',
+                    reason='agents_not_available_in_current_mode'
+                )
+            
             # Execute agents in the determined order
             agent_results = {}
-            execution_order = agent_selection['execution_order']
             
-            for agent_name in execution_order:
-                if agent_name in self.llm_agents:
-                    agent = self.llm_agents[agent_name]
-                    result = agent.process(prompt, context, history, feedback)
-                    agent_results[agent_name] = result
+            for agent_name in filtered_execution_order:
+                if agent_name in self.agents:
+                    agent = self.agents[agent_name]
                     
-                    # Check if we should continue based on results
-                    if not result.success and agent_selection.get('stop_on_failure', False):
-                        break
+                    self.logger.debug(
+                        f"Executing agent: {agent_name}",
+                        extra={
+                            'agent_name': agent_name,
+                            'agent_type': type(agent).__name__,
+                            'mode': 'llm_only' if self.llm_only_mode else 'hybrid'
+                        }
+                    )
+                    
+                    try:
+                        # Use fallback-aware processing for LLM agents
+                        if hasattr(agent, 'process_with_fallback'):
+                            result = agent.process_with_fallback(prompt, context, history, feedback)
+                        else:
+                            result = agent.process(prompt, context, history, feedback)
+                        
+                        agent_results[agent_name] = result
+                        
+                        # Reset LLM failure count on successful execution
+                        if result.success:
+                            self._reset_llm_failure_count()
+                        
+                        # Log agent execution result
+                        self.logger.debug(
+                            f"Agent {agent_name} execution completed",
+                            extra={
+                                'agent_name': agent_name,
+                                'success': result.success,
+                                'confidence': result.confidence_score,
+                                'suggestions_count': len(result.suggestions) if result.suggestions else 0,
+                                'fallback_used': result.analysis.get('fallback_used', False) if result.analysis else False
+                            }
+                        )
+                        
+                        # Check if we should continue based on results
+                        if not result.success and agent_selection.get('stop_on_failure', False):
+                            self.logger.warning(
+                                f"Stopping agent execution due to failure in {agent_name}",
+                                extra={'failed_agent': agent_name, 'error': result.error_message}
+                            )
+                            break
+                            
+                    except Exception as e:
+                        # Handle agent execution failure
+                        self.logger.error(f"Agent {agent_name} execution failed: {str(e)}")
+                        
+                        # Try error recovery
+                        recovery_result = self._handle_agent_failure({
+                            'agent_name': agent_name,
+                            'error': str(e),
+                            'agent_type': type(agent).__name__
+                        })
+                        
+                        if recovery_result.get('success', False):
+                            # Retry with fallback agent
+                            try:
+                                fallback_agent = self.agents.get(agent_name)
+                                if fallback_agent:
+                                    result = fallback_agent.process(prompt, context, history, feedback)
+                                    agent_results[agent_name] = result
+                                    self.logger.info(f"Successfully executed {agent_name} with fallback agent")
+                                else:
+                                    # Create error result
+                                    agent_results[agent_name] = AgentResult(
+                                        agent_name=agent_name,
+                                        success=False,
+                                        analysis={},
+                                        suggestions=[],
+                                        confidence_score=0.0,
+                                        error_message=f"Agent execution failed and no fallback available: {str(e)}"
+                                    )
+                            except Exception as fallback_error:
+                                self.logger.error(f"Fallback agent {agent_name} also failed: {str(fallback_error)}")
+                                agent_results[agent_name] = AgentResult(
+                                    agent_name=agent_name,
+                                    success=False,
+                                    analysis={},
+                                    suggestions=[],
+                                    confidence_score=0.0,
+                                    error_message=f"Both primary and fallback agents failed: {str(e)}, {str(fallback_error)}"
+                                )
+                        else:
+                            # Create error result
+                            agent_results[agent_name] = AgentResult(
+                                agent_name=agent_name,
+                                success=False,
+                                analysis={},
+                                suggestions=[],
+                                confidence_score=0.0,
+                                error_message=f"Agent execution failed: {str(e)}"
+                            )
+                else:
+                    self.logger.warning(
+                        f"Agent {agent_name} not available in current configuration",
+                        extra={
+                            'requested_agent': agent_name,
+                            'available_agents': available_agents,
+                            'mode': 'llm_only' if self.llm_only_mode else 'hybrid'
+                        }
+                    )
+            
+            # Log coordination summary
+            self.logger.info(
+                f"Agent coordination completed with {len(agent_results)} agents",
+                extra={
+                    'executed_agents': list(agent_results.keys()),
+                    'successful_agents': [name for name, result in agent_results.items() if result.success],
+                    'mode': 'llm_only' if self.llm_only_mode else 'hybrid',
+                    'strategy': agent_selection.get('strategy', 'unknown')
+                }
+            )
+            
+            # Track agent selection metrics
+            session_id = context.get('session_id', 'unknown') if context else 'unknown'
+            iteration = len(history) + 1 if history else 1
+            mode_usage_tracker.track_agent_selection(
+                session_id=session_id,
+                iteration=iteration,
+                available_agents=available_agents,
+                selected_agents=list(agent_results.keys()),
+                mode='llm_only' if self.llm_only_mode else 'hybrid'
+            )
+            
+            # Log agent selection metrics with orchestration logger
+            coordination_time = time.time() - coordination_start_time
+            orchestration_logger.log_agent_selection_metrics(
+                session_id=session_id,
+                iteration=iteration,
+                available_agents=available_agents,
+                selected_agents=list(agent_results.keys()),
+                execution_time=coordination_time,
+                mode='llm_only' if self.llm_only_mode else 'hybrid'
+            )
             
             return {
                 'success': True,
                 'agent_results': agent_results,
-                'execution_strategy': agent_selection
+                'execution_strategy': agent_selection,
+                'execution_order': filtered_execution_order,
+                'strategy_type': agent_selection.get('strategy', 'unknown'),
+                'reasoning': agent_selection.get('reasoning', '')
             }
             
         except Exception as e:
+            self.logger.error(
+                f"Agent coordination failed: {str(e)}",
+                extra={
+                    'error_type': type(e).__name__,
+                    'mode': 'llm_only' if self.llm_only_mode else 'hybrid',
+                    'available_agents': list(self.agents.keys()) if hasattr(self, 'agents') else []
+                }
+            )
             return {
                 'success': False,
                 'error': f"Agent coordination failed: {str(e)}"
@@ -514,12 +1069,15 @@ class LLMOrchestrationEngine:
             )
             
             if not llm_response.success:
-                # Fallback to default strategy
+                # Fallback to default strategy using available agents
+                available_agents = self.agent_factory.get_available_agents()
+                default_order = [agent for agent in ['analyzer', 'refiner', 'validator'] if agent in available_agents]
+                
                 return {
                     'success': True,
-                    'execution_order': ['analyzer', 'refiner', 'validator'],
+                    'execution_order': default_order,
                     'strategy': 'default_fallback',
-                    'reasoning': 'LLM coordination failed, using default strategy'
+                    'reasoning': 'LLM coordination failed, using default strategy with available agents'
                 }
             
             # Parse LLM response for coordination strategy
@@ -536,11 +1094,15 @@ class LLMOrchestrationEngine:
             
         except Exception as e:
             # Fallback to default strategy
+            # Fallback to default strategy using available agents on error
+            available_agents = self.agent_factory.get_available_agents()
+            default_order = [agent for agent in ['analyzer', 'refiner', 'validator'] if agent in available_agents]
+            
             return {
                 'success': True,
-                'execution_order': ['analyzer', 'refiner', 'validator'],
+                'execution_order': default_order,
                 'strategy': 'error_fallback',
-                'reasoning': f'Error in coordination: {str(e)}'
+                'reasoning': f'Error in coordination: {str(e)}, using available agents'
             }
     
     def _build_agent_coordination_prompt(self,
@@ -625,12 +1187,36 @@ class LLMOrchestrationEngine:
                         coordination_prompt_parts.append(f"  - {suggestion}")
                     coordination_prompt_parts.append("")
         
-        # Add coordination instructions
+        # Add coordination instructions with available agents based on current mode
+        available_agents = self.agent_factory.get_available_agents()
         coordination_prompt_parts.extend([
             "AVAILABLE AGENTS:",
-            "- analyzer: Analyzes prompt structure, clarity, and best practices compliance",
-            "- refiner: Generates improved prompt versions based on analysis",
-            "- validator: Validates refined prompts for quality and correctness",
+        ])
+        
+        # Add agent descriptions based on what's available in current mode
+        agent_descriptions = {
+            'analyzer': "- analyzer: Analyzes prompt structure, clarity, and best practices compliance",
+            'refiner': "- refiner: Generates improved prompt versions based on analysis", 
+            'validator': "- validator: Validates refined prompts for quality and correctness",
+            'llm_analyzer': "- llm_analyzer: LLM-enhanced analysis of prompt structure and best practices",
+            'llm_refiner': "- llm_refiner: LLM-enhanced prompt refinement and improvement",
+            'llm_validator': "- llm_validator: LLM-enhanced validation of prompt quality and correctness"
+        }
+        
+        for agent_name in available_agents:
+            if agent_name in agent_descriptions:
+                coordination_prompt_parts.append(agent_descriptions[agent_name])
+        
+        # Add mode information
+        mode_info = f"Current mode: {self.agent_factory.get_mode_description()}"
+        if self.llm_only_mode:
+            bypassed_agents = self.agent_factory.get_bypassed_agents()
+            if bypassed_agents:
+                mode_info += f" (bypassing: {', '.join(bypassed_agents)})"
+        
+        coordination_prompt_parts.extend([
+            "",
+            f"MODE: {mode_info}",
             "",
             "COORDINATION TASK:",
             "Determine the optimal execution strategy considering:",
@@ -1294,6 +1880,22 @@ class LLMOrchestrationEngine:
     def get_convergence_config(self) -> Dict[str, Any]:
         """Get current convergence configuration."""
         return self.convergence_config.copy()
+    
+    def get_current_mode(self) -> Dict[str, Any]:
+        """
+        Get information about the current orchestration mode.
+        
+        Returns:
+            Dictionary containing mode information
+        """
+        return {
+            'mode': 'llm_only' if self.llm_only_mode else 'hybrid',
+            'description': self.agent_factory.get_mode_description(),
+            'available_agents': list(self.agents.keys()),
+            'bypassed_agents': self.agent_factory.get_bypassed_agents(),
+            'llm_only_mode': self.llm_only_mode,
+            'fallback_enabled': self.optimization_config.get('fallback_to_heuristic', True)
+        }
     
     def _setup_error_recovery(self) -> None:
         """Set up error recovery strategies for orchestration."""

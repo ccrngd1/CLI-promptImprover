@@ -68,6 +68,11 @@ class LLMValidatorAgent(LLMAgent):
             # Call LLM for validation
             llm_response = self._call_llm(validation_prompt, context)
             
+            # Check if fallback should be used
+            if self._should_use_fallback(llm_response):
+                return self._process_with_fallback_agent(prompt, context, history, feedback, 
+                                                       llm_response.get('error', 'LLM service unavailable'))
+            
             if not llm_response['success']:
                 return AgentResult(
                     agent_name=self.name,
@@ -120,6 +125,10 @@ class LLMValidatorAgent(LLMAgent):
             )
             
         except Exception as e:
+            # Try fallback if enabled
+            if self.config.get('fallback_to_heuristic', True) and self.config.get('llm_only_mode', False):
+                return self._process_with_fallback_agent(prompt, context, history, feedback, str(e))
+            
             return AgentResult(
                 agent_name=self.name,
                 success=False,

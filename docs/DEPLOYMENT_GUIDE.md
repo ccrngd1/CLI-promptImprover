@@ -446,6 +446,98 @@ monitoring:
   error_tracking: true
 ```
 
+## LLM-Only Mode Configuration
+
+### Production LLM-Only Mode Setup
+
+For production deployments using LLM-only mode, additional considerations apply:
+
+```yaml
+# config/production-llm-only.yaml
+optimization:
+  llm_only_mode: true
+  fallback_to_heuristic: true
+  cost_monitoring: true
+  rate_limiting: true
+
+performance:
+  cache_enabled: true
+  cache_ttl: 7200  # Longer cache for cost efficiency
+  max_concurrent_llm_calls: 5
+  request_timeout: 600  # Longer timeout for LLM calls
+
+monitoring:
+  token_usage_tracking: true
+  cost_alerts_enabled: true
+  performance_degradation_alerts: true
+```
+
+### Cost Management
+
+#### Token Usage Monitoring
+
+```python
+# cost_monitor.py
+class LLMCostMonitor:
+    def __init__(self):
+        self.token_costs = {
+            'anthropic.claude-3-sonnet-20240229-v1:0': {
+                'input': 0.003,   # per 1K tokens
+                'output': 0.015   # per 1K tokens
+            },
+            'anthropic.claude-3-haiku-20240307-v1:0': {
+                'input': 0.00025,
+                'output': 0.00125
+            }
+        }
+    
+    def calculate_session_cost(self, session_data):
+        total_cost = 0
+        for interaction in session_data['interactions']:
+            model = interaction['model']
+            input_tokens = interaction['input_tokens']
+            output_tokens = interaction['output_tokens']
+            
+            if model in self.token_costs:
+                cost = (
+                    (input_tokens / 1000) * self.token_costs[model]['input'] +
+                    (output_tokens / 1000) * self.token_costs[model]['output']
+                )
+                total_cost += cost
+        
+        return total_cost
+```
+
+#### Rate Limiting Configuration
+
+```python
+# rate_limiter.py
+from ratelimit import limits, sleep_and_retry
+import time
+
+class LLMRateLimiter:
+    def __init__(self, calls_per_minute=60):
+        self.calls_per_minute = calls_per_minute
+    
+    @sleep_and_retry
+    @limits(calls=60, period=60)  # 60 calls per minute
+    def make_llm_call(self, func, *args, **kwargs):
+        return func(*args, **kwargs)
+```
+
+### Environment Variables for LLM-Only Mode
+
+```bash
+# LLM-Only Mode Configuration
+export OPTIMIZER_LLM_ONLY_MODE=true
+export OPTIMIZER_FALLBACK_ENABLED=true
+export OPTIMIZER_COST_MONITORING=true
+export OPTIMIZER_MAX_CONCURRENT_LLM_CALLS=5
+export OPTIMIZER_LLM_TIMEOUT=600
+export OPTIMIZER_CACHE_LLM_RESPONSES=true
+export OPTIMIZER_CACHE_TTL=7200
+```
+
 ## Production Configuration
 
 ### 1. Security Hardening

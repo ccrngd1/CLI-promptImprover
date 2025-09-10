@@ -5,9 +5,11 @@ from .analyzer import AnalyzerAgent
 from .refiner import RefinerAgent
 from .validator import ValidatorAgent
 from .ensemble import AgentEnsemble, EnsembleResult, ConsensusConfig
+from .factory import AgentFactory
 
 __all__ = [
     'Agent', 'AgentResult', 
     'AnalyzerAgent', 'RefinerAgent', 'ValidatorAgent',
-    'AgentEnsemble', 'EnsembleResult', 'ConsensusConfig'
+    'AgentEnsemble', 'EnsembleResult', 'ConsensusConfig',
+    'AgentFactory'
 ]

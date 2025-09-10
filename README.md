@@ -6,6 +6,7 @@ A comprehensive multi-agent system for iteratively improving prompts for Amazon 
 
 - **Multi-Agent Collaboration**: Specialized agents (Analyzer, Refiner, Validator, Evaluator) work together to optimize prompts
 - **LLM-Powered Orchestration**: Intelligent coordination and conflict resolution using LLM-based decision making
+- **LLM-Only Mode**: Option to bypass heuristic agents and use exclusively LLM-based optimization for complex reasoning tasks
 - **Best Practices Integration**: Curated prompt engineering techniques embedded in agent system prompts
 - **Real-time Bedrock Testing**: Execute prompts against Amazon Bedrock models for immediate feedback
 - **Automated Evaluation**: Multi-criteria assessment with LLM-based quality scoring
@@ -54,8 +55,14 @@ python cli/setup.py
 ### Basic Usage
 
 ```bash
-# Start an interactive optimization session
+# Start an interactive optimization session (hybrid mode)
 bedrock-optimizer optimize "Explain machine learning to a beginner" --interactive
+
+# Use LLM-only mode for complex reasoning
+bedrock-optimizer optimize "Develop a comprehensive AI strategy for enterprise transformation" \
+  --llm-only \
+  --context "Executive strategic planning" \
+  --max-iterations 5
 
 # Non-interactive optimization with specific parameters
 bedrock-optimizer optimize "Write a product description for a smartphone" \
@@ -199,6 +206,12 @@ orchestration:
   score_improvement_threshold: 0.02
   convergence_confidence_threshold: 0.8
 
+optimization:
+  llm_only_mode: false
+  fallback_to_heuristic: true
+  cost_monitoring: false
+  cache_llm_responses: true
+
 agents:
   analyzer:
     enabled: true
@@ -248,6 +261,7 @@ bedrock-optimizer config --restore my-backup.yaml
 ### Comprehensive Guides
 
 - **[CLI Usage Guide](docs/CLI_USAGE.md)**: Complete command-line interface documentation
+- **[LLM-Only Mode Guide](docs/LLM_ONLY_MODE_GUIDE.md)**: Performance, cost implications, and best practices
 - **[Best Practices Guide](docs/BEST_PRACTICES_GUIDE.md)**: Repository structure and customization
 - **[Deployment Guide](docs/DEPLOYMENT_GUIDE.md)**: Production deployment and scaling
 

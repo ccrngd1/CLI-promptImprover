@@ -449,6 +449,53 @@ done
 
 ## Advanced Features
 
+### LLM-Only Mode
+
+The CLI supports LLM-only mode for exclusive LLM-based optimization:
+
+```bash
+# Enable LLM-only mode for a single optimization
+bedrock-optimizer optimize "Your prompt" --llm-only
+
+# Configure LLM-only mode globally
+bedrock-optimizer config --set optimization.llm_only_mode=true
+
+# Optimize with LLM-only mode and cost management
+bedrock-optimizer optimize "Complex reasoning prompt" \
+  --llm-only \
+  --max-iterations 3 \
+  --model anthropic.claude-3-haiku-20240307-v1:0
+```
+
+#### LLM-Only Mode Options
+
+- `--llm-only`: Enable LLM-only mode for this session
+- `--no-fallback`: Disable fallback to heuristic agents
+- `--cost-aware`: Enable cost monitoring and warnings
+
+#### Performance and Cost Considerations
+
+**Monitor Usage:**
+```bash
+# View token usage statistics
+bedrock-optimizer history --session-id abc123 --show-costs
+
+# Export cost analysis
+bedrock-optimizer history --cost-report --since 2024-01-01 --export costs.csv
+```
+
+**Cost Management:**
+```bash
+# Use cost-effective model for LLM-only mode
+bedrock-optimizer optimize "Your prompt" \
+  --llm-only \
+  --model anthropic.claude-3-haiku-20240307-v1:0 \
+  --max-iterations 3
+
+# Enable caching to reduce API calls
+bedrock-optimizer config --set performance.cache_enabled=true
+```
+
 ### Interactive Mode
 
 Interactive mode provides step-by-step guidance:

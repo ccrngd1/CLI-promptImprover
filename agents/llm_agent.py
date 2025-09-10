@@ -138,6 +138,189 @@ class LLMAgent(Agent):
                 'error': str(e)
             }
     
+    def _create_fallback_agent(self):
+        """
+        Create a fallback heuristic agent for when LLM fails.
+        
+        Returns:
+            Heuristic agent instance or None if fallback not available
+        """
+        # Import here to avoid circular imports
+        from agents.analyzer import AnalyzerAgent
+        from agents.refiner import RefinerAgent
+        from agents.validator import ValidatorAgent
+        
+        agent_type = self.name.lower()
+        fallback_config = self.config.copy()
+        
+        # Remove LLM-specific configuration for heuristic agent
+        fallback_config.pop('llm_model', None)
+        fallback_config.pop('llm_temperature', None)
+        fallback_config.pop('llm_max_tokens', None)
+        fallback_config.pop('llm_timeout', None)
+        
+        try:
+            if 'analyzer' in agent_type:
+                return AnalyzerAgent(fallback_config)
+            elif 'refiner' in agent_type:
+                return RefinerAgent(fallback_config)
+            elif 'validator' in agent_type:
+                return ValidatorAgent(fallback_config)
+            else:
+                return None
+        except Exception as e:
+            # Log fallback creation failure
+            print(f"Failed to create fallback agent for {self.name}: {str(e)}")
+            return None
+    
+    def _should_use_fallback(self, llm_response: Dict[str, Any]) -> bool:
+        """
+        Determine if fallback should be used based on LLM response.
+        
+        Args:
+            llm_response: Response from LLM call
+            
+        Returns:
+            True if fallback should be used, False otherwise
+        """
+        # Check if fallback is enabled in configuration
+        fallback_enabled = self.config.get('fallback_to_heuristic', True)
+        llm_only_mode = self.config.get('llm_only_mode', False)
+        
+        if not fallback_enabled or not llm_only_mode:
+            return False
+        
+        # Use fallback if LLM call failed
+        if not llm_response.get('success', False):
+            return True
+        
+        # Use fallback if response is empty or too short
+        response_text = llm_response.get('response', '')
+        if not response_text or len(response_text.strip()) < 50:
+            return True
+        
+        # Use fallback if response indicates an error
+        error_indicators = ['error', 'failed', 'unable', 'cannot process', 'service unavailable']
+        if any(indicator in response_text.lower() for indicator in error_indicators):
+            return True
+        
+        return False
+    
+    def process_with_fallback(self, 
+                            prompt: str, 
+                            context: Optional[Dict[str, Any]] = None,
+                            history: Optional[List[PromptIteration]] = None,
+                            feedback: Optional[UserFeedback] = None) -> AgentResult:
+        """
+        Process with LLM and fallback to heuristic agent if needed.
+        
+        Args:
+            prompt: The prompt text to process
+            context: Optional context about the prompt's intended use
+            history: Optional list of previous prompt iterations
+            feedback: Optional user feedback from previous iterations
+            
+        Returns:
+            AgentResult from LLM or fallback agent
+        """
+        # First try the normal LLM processing
+        try:
+            llm_result = self.process(prompt, context, history, feedback)
+            
+            # If LLM processing succeeded, return the result
+            if llm_result.success:
+                return llm_result
+            
+            # If LLM failed and fallback is enabled, try fallback
+            if self.config.get('fallback_to_heuristic', True) and self.config.get('llm_only_mode', False):
+                return self._process_with_fallback_agent(prompt, context, history, feedback, llm_result.error_message)
+            
+            return llm_result
+            
+        except Exception as e:
+            # If LLM processing threw an exception and fallback is enabled, try fallback
+            if self.config.get('fallback_to_heuristic', True) and self.config.get('llm_only_mode', False):
+                return self._process_with_fallback_agent(prompt, context, history, feedback, str(e))
+            
+            # Otherwise, return error result
+            return AgentResult(
+                agent_name=self.name,
+                success=False,
+                analysis={},
+                suggestions=[],
+                confidence_score=0.0,
+                error_message=f"LLM processing failed: {str(e)}"
+            )
+    
+    def _process_with_fallback_agent(self, 
+                                   prompt: str, 
+                                   context: Optional[Dict[str, Any]] = None,
+                                   history: Optional[List[PromptIteration]] = None,
+                                   feedback: Optional[UserFeedback] = None,
+                                   llm_error: Optional[str] = None) -> AgentResult:
+        """
+        Process using fallback heuristic agent.
+        
+        Args:
+            prompt: The prompt text to process
+            context: Optional context about the prompt's intended use
+            history: Optional list of previous prompt iterations
+            feedback: Optional user feedback from previous iterations
+            llm_error: Error message from failed LLM processing
+            
+        Returns:
+            AgentResult from fallback agent
+        """
+        fallback_agent = self._create_fallback_agent()
+        
+        if fallback_agent is None:
+            return AgentResult(
+                agent_name=self.name,
+                success=False,
+                analysis={},
+                suggestions=[],
+                confidence_score=0.0,
+                error_message=f"LLM failed and no fallback agent available. LLM error: {llm_error}"
+            )
+        
+        try:
+            # Process with fallback agent
+            fallback_result = fallback_agent.process(prompt, context, history, feedback)
+            
+            # Modify the result to indicate fallback was used
+            fallback_result.agent_name = f"{self.name} (fallback)"
+            
+            # Add fallback information to analysis
+            if fallback_result.analysis is None:
+                fallback_result.analysis = {}
+            
+            fallback_result.analysis['fallback_used'] = True
+            fallback_result.analysis['llm_error'] = llm_error
+            fallback_result.analysis['fallback_agent'] = fallback_agent.name
+            
+            # Reduce confidence score to indicate fallback was used
+            if fallback_result.confidence_score > 0:
+                fallback_result.confidence_score *= 0.8  # Reduce confidence by 20%
+            
+            # Add fallback notice to suggestions
+            if fallback_result.suggestions is None:
+                fallback_result.suggestions = []
+            
+            fallback_result.suggestions.insert(0, 
+                f"Note: LLM processing failed ({llm_error}), using heuristic fallback analysis")
+            
+            return fallback_result
+            
+        except Exception as e:
+            return AgentResult(
+                agent_name=self.name,
+                success=False,
+                analysis={},
+                suggestions=[],
+                confidence_score=0.0,
+                error_message=f"Both LLM and fallback processing failed. LLM error: {llm_error}, Fallback error: {str(e)}"
+            )
+    
     def _prepare_full_prompt(self, user_prompt: str, context: Optional[Dict[str, Any]] = None) -> str:
         """
         Prepare the full prompt including system prompt, context, and user input.
