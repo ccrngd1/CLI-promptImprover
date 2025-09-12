@@ -249,6 +249,17 @@ class AgentFactory:
         """
         agent_config = self.agent_configs.get(agent_type, {}).copy()
         
+        # Map 'model' key to 'llm_model' for LLM agents compatibility
+        if 'model' in agent_config and 'llm_model' not in agent_config:
+            agent_config['llm_model'] = agent_config['model']
+        
+        # Map other agent-specific keys to LLM agent expected keys
+        if 'temperature' in agent_config and 'llm_temperature' not in agent_config:
+            agent_config['llm_temperature'] = agent_config['temperature']
+        
+        if 'max_tokens' in agent_config and 'llm_max_tokens' not in agent_config:
+            agent_config['llm_max_tokens'] = agent_config['max_tokens']
+        
         # Add mode information to agent config
         agent_config['llm_only_mode'] = self.llm_only_mode
         agent_config['fallback_enabled'] = self.fallback_to_heuristic

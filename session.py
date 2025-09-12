@@ -116,7 +116,8 @@ class SessionManager:
                  bedrock_executor: BedrockExecutor,
                  evaluator: Evaluator,
                  history_manager: Optional[HistoryManager] = None,
-                 orchestration_config: Optional[Dict[str, Any]] = None):
+                 orchestration_config: Optional[Dict[str, Any]] = None,
+                 full_config: Optional[Dict[str, Any]] = None):
         """
         Initialize the SessionManager.
         
@@ -124,17 +125,21 @@ class SessionManager:
             bedrock_executor: Bedrock executor for prompt execution
             evaluator: Evaluator for response assessment
             history_manager: Optional history manager (creates default if None)
-            orchestration_config: Optional orchestration configuration
+            orchestration_config: Optional orchestration configuration (deprecated, use full_config)
+            full_config: Full configuration including optimization settings
         """
         self.bedrock_executor = bedrock_executor
         self.evaluator = evaluator
         self.history_manager = history_manager or HistoryManager()
         
+        # Use full_config if provided, otherwise fall back to orchestration_config for backward compatibility
+        engine_config = full_config or orchestration_config or {}
+        
         # Initialize orchestration engine
         self.orchestration_engine = LLMOrchestrationEngine(
             bedrock_executor=bedrock_executor,
             evaluator=evaluator,
-            config=orchestration_config or {}
+            config=engine_config
         )
         
         # Active sessions tracking

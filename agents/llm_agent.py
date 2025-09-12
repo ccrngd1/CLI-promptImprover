@@ -7,10 +7,13 @@ best practices and reasoning capabilities.
 """
 
 import json
+import time
 from abc import abstractmethod
 from typing import Dict, Any, List, Optional, Union
 from agents.base import Agent, AgentResult
+from agents.llm_agent_logger import LLMAgentLogger
 from models import PromptIteration, UserFeedback
+from bedrock.executor import BedrockExecutor, ModelConfig
 
 
 class LLMAgent(Agent):
@@ -42,6 +45,23 @@ class LLMAgent(Agent):
         self.system_prompt_template = self.config.get('system_prompt_template', '')
         self.best_practices_enabled = self.config.get('best_practices_enabled', True)
         self.reasoning_framework = self.config.get('reasoning_framework', 'structured')
+        
+        # Initialize LLM agent logger with configuration
+        try:
+            from config_loader import get_llm_logging_config, load_config
+            llm_logging_config = get_llm_logging_config()
+            full_config = load_config()
+            bedrock_config = full_config.get('bedrock', {})
+        except ImportError:
+            llm_logging_config = {}
+            bedrock_config = {}
+        
+        self.llm_logger = LLMAgentLogger(agent_name=name, config=llm_logging_config)
+        
+        # Initialize Bedrock executor
+        self.bedrock_executor = BedrockExecutor(
+            region_name=bedrock_config.get('region', 'us-east-1')
+        )
         
         # Initialize system prompt
         self.system_prompt = self._build_system_prompt()
@@ -98,28 +118,50 @@ class LLMAgent(Agent):
         
         return "\n\n".join(prompt_parts)
     
-    def _call_llm(self, user_prompt: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _call_llm(self, user_prompt: str, context: Optional[Dict[str, Any]] = None, 
+                  session_id: Optional[str] = None, iteration: Optional[int] = None) -> Dict[str, Any]:
         """
         Make a call to the LLM with the system prompt and user input.
         
         Args:
             user_prompt: The user prompt to send to the LLM
             context: Optional context to include in the prompt
+            session_id: Optional session identifier for logging
+            iteration: Optional iteration number for logging
             
         Returns:
             Dictionary containing the LLM response and metadata
         """
-        # In a real implementation, this would call an actual LLM API
-        # For now, we'll simulate the response structure
-        
         # Prepare the full prompt
         full_prompt = self._prepare_full_prompt(user_prompt, context)
         
+        # Log the LLM call
+        model_config = {
+            'model': self.llm_model,
+            'temperature': self.llm_temperature,
+            'max_tokens': self.llm_max_tokens,
+            'timeout': self.llm_timeout
+        }
+        
+        self.llm_logger.log_llm_call(
+            prompt=full_prompt,
+            context=context,
+            session_id=session_id,
+            iteration=iteration,
+            model_config=model_config
+        )
+        
+        # Record start time for performance logging
+        start_time = time.time()
+        
         try:
-            # Simulate LLM call - in practice, this would use an actual LLM client
-            response = self._simulate_llm_response(full_prompt)
+            # Use actual Bedrock executor instead of simulation
+            response = self._execute_bedrock_call(full_prompt)
             
-            return {
+            # Calculate processing time
+            processing_time = time.time() - start_time
+            
+            llm_response = {
                 'success': True,
                 'response': response,
                 'model': self.llm_model,
@@ -128,8 +170,21 @@ class LLMAgent(Agent):
                 'error': None
             }
             
+            # Log the LLM response
+            self.llm_logger.log_llm_response(
+                response=llm_response,
+                session_id=session_id,
+                iteration=iteration,
+                processing_time=processing_time
+            )
+            
+            return llm_response
+            
         except Exception as e:
-            return {
+            # Calculate processing time even for errors
+            processing_time = time.time() - start_time
+            
+            error_response = {
                 'success': False,
                 'response': '',
                 'model': self.llm_model,
@@ -137,189 +192,280 @@ class LLMAgent(Agent):
                 'temperature': self.llm_temperature,
                 'error': str(e)
             }
+            
+            # Log the failed LLM response
+            self.llm_logger.log_llm_response(
+                response=error_response,
+                session_id=session_id,
+                iteration=iteration,
+                processing_time=processing_time
+            )
+            
+            # Enhanced error logging with service failure details
+            error_details = {
+                'error_type': type(e).__name__,
+                'error_message': str(e),
+                'model': self.llm_model,
+                'timeout': processing_time > self.llm_timeout,
+                'prompt_length': len(full_prompt),
+                'processing_time': processing_time
+            }
+            
+            # Log as LLM service failure with fallback information
+            self.llm_logger.log_llm_service_failure(
+                error_details=error_details,
+                fallback_action="Will attempt fallback agent if enabled"
+            )
+            
+            # Also log the general error
+            self.llm_logger.log_error(
+                error_type='llm_call_failed',
+                error_message=str(e),
+                context={'user_prompt_length': len(user_prompt), 'has_context': context is not None},
+                exception=e
+            )
+            
+            return error_response
     
-    def _create_fallback_agent(self):
+    def _parse_llm_response(self, response: str, session_id: Optional[str] = None, 
+                           iteration: Optional[int] = None) -> Dict[str, Any]:
         """
-        Create a fallback heuristic agent for when LLM fails.
+        Parse the LLM response into structured data.
         
+        Args:
+            response: Raw LLM response string
+            session_id: Optional session identifier for logging
+            iteration: Optional iteration number for logging
+            
         Returns:
-            Heuristic agent instance or None if fallback not available
+            Parsed response as structured dictionary
         """
-        # Import here to avoid circular imports
-        from agents.analyzer import AnalyzerAgent
-        from agents.refiner import RefinerAgent
-        from agents.validator import ValidatorAgent
-        
-        agent_type = self.name.lower()
-        fallback_config = self.config.copy()
-        
-        # Remove LLM-specific configuration for heuristic agent
-        fallback_config.pop('llm_model', None)
-        fallback_config.pop('llm_temperature', None)
-        fallback_config.pop('llm_max_tokens', None)
-        fallback_config.pop('llm_timeout', None)
+        parsing_errors = []
+        parsing_success = True
         
         try:
-            if 'analyzer' in agent_type:
-                return AnalyzerAgent(fallback_config)
-            elif 'refiner' in agent_type:
-                return RefinerAgent(fallback_config)
-            elif 'validator' in agent_type:
-                return ValidatorAgent(fallback_config)
+            # Try to extract structured information from the response
+            parsed = {
+                'raw_response': response,
+                'analysis': {},
+                'recommendations': [],
+                'confidence': 0.8,  # Default confidence
+                'reasoning': ''
+            }
+            
+            # Extract recommendations (lines starting with numbers or bullets)
+            import re
+            try:
+                recommendations = re.findall(r'^\s*[\d\-\*]\.\s*(.+)', response, re.MULTILINE)
+                parsed['recommendations'] = recommendations
+                
+                # Log component extraction for recommendations
+                self.llm_logger.log_component_extraction(
+                    component_type='recommendations',
+                    extracted_data=recommendations,
+                    success=len(recommendations) > 0,
+                    extraction_method='regex_pattern'
+                )
+                
+            except Exception as e:
+                parsing_errors.append(f"Failed to extract recommendations: {str(e)}")
+                parsed['recommendations'] = []
+                
+                # Log extraction failure with attempted methods
+                self.llm_logger.log_extraction_failure(
+                    component_type='recommendations',
+                    extraction_error=str(e),
+                    attempted_methods=['regex_pattern'],
+                    fallback_value=[],
+                    context={'response_length': len(response)}
+                )
+            
+            # Extract confidence if mentioned
+            try:
+                confidence_match = re.search(r'confidence[:\s]+(\d+(?:\.\d+)?)', response, re.IGNORECASE)
+                if confidence_match:
+                    parsed['confidence'] = float(confidence_match.group(1))
+                    if parsed['confidence'] > 1.0:  # Handle percentage format
+                        parsed['confidence'] /= 100.0
+                    
+                    # Log component extraction for confidence
+                    self.llm_logger.log_component_extraction(
+                        component_type='confidence_score',
+                        extracted_data=parsed['confidence'],
+                        success=True,
+                        extraction_method='regex_pattern',
+                        confidence=1.0
+                    )
+                else:
+                    # Log that no confidence was found, using default
+                    self.llm_logger.log_component_extraction(
+                        component_type='confidence_score',
+                        extracted_data=parsed['confidence'],
+                        success=False,
+                        extraction_method='default_value'
+                    )
+                    
+            except Exception as e:
+                parsing_errors.append(f"Failed to extract confidence: {str(e)}")
+                parsed['confidence'] = 0.8
+                
+                # Log extraction failure for confidence
+                self.llm_logger.log_extraction_failure(
+                    component_type='confidence_score',
+                    extraction_error=str(e),
+                    attempted_methods=['regex_pattern'],
+                    fallback_value=0.8,
+                    context={'response_length': len(response)}
+                )
+            
+            # Extract reasoning sections
+            try:
+                reasoning_sections = re.findall(r'(reasoning|analysis|assessment)[:\s]*\n(.+?)(?=\n\n|\n[A-Z]|\Z)', 
+                                              response, re.IGNORECASE | re.DOTALL)
+                if reasoning_sections:
+                    parsed['reasoning'] = '\n'.join([section[1].strip() for section in reasoning_sections])
+                
+                # Log component extraction for reasoning
+                self.llm_logger.log_component_extraction(
+                    component_type='reasoning',
+                    extracted_data=parsed['reasoning'],
+                    success=bool(parsed['reasoning']),
+                    extraction_method='regex_pattern'
+                )
+                
+            except Exception as e:
+                parsing_errors.append(f"Failed to extract reasoning: {str(e)}")
+                parsed['reasoning'] = ''
+                
+                # Log extraction failure for reasoning
+                self.llm_logger.log_extraction_failure(
+                    component_type='reasoning',
+                    extraction_error=str(e),
+                    attempted_methods=['regex_pattern'],
+                    fallback_value='',
+                    context={'response_length': len(response)}
+                )
+            
+            # Determine overall parsing success and handle partial results
+            if parsing_errors:
+                parsing_success = False
+                
+                # Check if we have partial results despite errors
+                partial_results = {}
+                if parsed['recommendations']:
+                    partial_results['recommendations'] = parsed['recommendations']
+                if parsed['confidence'] > 0:
+                    partial_results['confidence'] = parsed['confidence']
+                if parsed['reasoning']:
+                    partial_results['reasoning'] = parsed['reasoning']
+                
+                # Log partial results if any were extracted
+                if partial_results:
+                    self.llm_logger.log_parsing_failure(
+                        parsing_error=f"Partial parsing failure: {'; '.join(parsing_errors)}",
+                        raw_response=response,
+                        partial_results=partial_results,
+                        fallback_strategy="Using partial results with defaults for missing components"
+                    )
+            
+        except Exception as e:
+            # Complete parsing failure
+            parsing_success = False
+            parsing_errors.append(f"Complete parsing failure: {str(e)}")
+            
+            parsed = {
+                'raw_response': response,
+                'analysis': {},
+                'recommendations': [],
+                'confidence': 0.0,
+                'reasoning': ''
+            }
+            
+            # Enhanced parsing failure logging
+            self.llm_logger.log_parsing_failure(
+                parsing_error=str(e),
+                raw_response=response,
+                partial_results=None,
+                fallback_strategy="Using default empty structure"
+            )
+            
+            # Also log the general error
+            self.llm_logger.log_error(
+                error_type='response_parsing_failed',
+                error_message=str(e),
+                context={'response_length': len(response)},
+                exception=e
+            )
+        
+        # Log the parsing results
+        self.llm_logger.log_parsed_response(
+            parsed_data=parsed,
+            session_id=session_id,
+            iteration=iteration,
+            parsing_success=parsing_success,
+            parsing_errors=parsing_errors if parsing_errors else None
+        )
+        
+        return parsed
+    
+    def _calculate_confidence_with_logging(self, factors: Dict[str, float], 
+                                         reasoning: str = "", 
+                                         method: str = "weighted_average") -> float:
+        """
+        Calculate confidence score with comprehensive logging.
+        
+        Args:
+            factors: Dictionary of confidence factors and their weights
+            reasoning: Reasoning behind the confidence calculation
+            method: Method used for calculation
+            
+        Returns:
+            Calculated confidence score
+        """
+        try:
+            if not factors:
+                confidence = 0.5  # Default when no factors provided
+                reasoning = "No confidence factors provided, using default value"
             else:
-                return None
-        except Exception as e:
-            # Log fallback creation failure
-            print(f"Failed to create fallback agent for {self.name}: {str(e)}")
-            return None
-    
-    def _should_use_fallback(self, llm_response: Dict[str, Any]) -> bool:
-        """
-        Determine if fallback should be used based on LLM response.
-        
-        Args:
-            llm_response: Response from LLM call
+                # Calculate weighted average
+                total_weight = sum(factors.values())
+                if total_weight > 0:
+                    confidence = sum(weight for weight in factors.values()) / len(factors)
+                else:
+                    confidence = 0.5
+                    reasoning = f"Zero total weight in factors, using default. Factors: {factors}"
             
-        Returns:
-            True if fallback should be used, False otherwise
-        """
-        # Check if fallback is enabled in configuration
-        fallback_enabled = self.config.get('fallback_to_heuristic', True)
-        llm_only_mode = self.config.get('llm_only_mode', False)
-        
-        if not fallback_enabled or not llm_only_mode:
-            return False
-        
-        # Use fallback if LLM call failed
-        if not llm_response.get('success', False):
-            return True
-        
-        # Use fallback if response is empty or too short
-        response_text = llm_response.get('response', '')
-        if not response_text or len(response_text.strip()) < 50:
-            return True
-        
-        # Use fallback if response indicates an error
-        error_indicators = ['error', 'failed', 'unable', 'cannot process', 'service unavailable']
-        if any(indicator in response_text.lower() for indicator in error_indicators):
-            return True
-        
-        return False
-    
-    def process_with_fallback(self, 
-                            prompt: str, 
-                            context: Optional[Dict[str, Any]] = None,
-                            history: Optional[List[PromptIteration]] = None,
-                            feedback: Optional[UserFeedback] = None) -> AgentResult:
-        """
-        Process with LLM and fallback to heuristic agent if needed.
-        
-        Args:
-            prompt: The prompt text to process
-            context: Optional context about the prompt's intended use
-            history: Optional list of previous prompt iterations
-            feedback: Optional user feedback from previous iterations
+            # Ensure confidence is within valid range
+            confidence = max(0.0, min(1.0, confidence))
             
-        Returns:
-            AgentResult from LLM or fallback agent
-        """
-        # First try the normal LLM processing
-        try:
-            llm_result = self.process(prompt, context, history, feedback)
+            # Log the confidence calculation
+            self.llm_logger.log_confidence_calculation(
+                confidence_score=confidence,
+                reasoning=reasoning,
+                factors=factors,
+                calculation_method=method
+            )
             
-            # If LLM processing succeeded, return the result
-            if llm_result.success:
-                return llm_result
-            
-            # If LLM failed and fallback is enabled, try fallback
-            if self.config.get('fallback_to_heuristic', True) and self.config.get('llm_only_mode', False):
-                return self._process_with_fallback_agent(prompt, context, history, feedback, llm_result.error_message)
-            
-            return llm_result
+            return confidence
             
         except Exception as e:
-            # If LLM processing threw an exception and fallback is enabled, try fallback
-            if self.config.get('fallback_to_heuristic', True) and self.config.get('llm_only_mode', False):
-                return self._process_with_fallback_agent(prompt, context, history, feedback, str(e))
-            
-            # Otherwise, return error result
-            return AgentResult(
-                agent_name=self.name,
-                success=False,
-                analysis={},
-                suggestions=[],
-                confidence_score=0.0,
-                error_message=f"LLM processing failed: {str(e)}"
+            # Enhanced confidence calculation fallback logging
+            fallback_confidence = 0.5
+            self.llm_logger.log_confidence_calculation_fallback(
+                calculation_error=str(e),
+                fallback_confidence=fallback_confidence,
+                original_factors=factors,
+                fallback_reasoning=f"Calculation failed with {method}, using default confidence"
             )
-    
-    def _process_with_fallback_agent(self, 
-                                   prompt: str, 
-                                   context: Optional[Dict[str, Any]] = None,
-                                   history: Optional[List[PromptIteration]] = None,
-                                   feedback: Optional[UserFeedback] = None,
-                                   llm_error: Optional[str] = None) -> AgentResult:
-        """
-        Process using fallback heuristic agent.
-        
-        Args:
-            prompt: The prompt text to process
-            context: Optional context about the prompt's intended use
-            history: Optional list of previous prompt iterations
-            feedback: Optional user feedback from previous iterations
-            llm_error: Error message from failed LLM processing
             
-        Returns:
-            AgentResult from fallback agent
-        """
-        fallback_agent = self._create_fallback_agent()
-        
-        if fallback_agent is None:
-            return AgentResult(
-                agent_name=self.name,
-                success=False,
-                analysis={},
-                suggestions=[],
-                confidence_score=0.0,
-                error_message=f"LLM failed and no fallback agent available. LLM error: {llm_error}"
+            # Also log the general error
+            self.llm_logger.log_error(
+                error_type='confidence_calculation_failed',
+                error_message=str(e),
+                context={'factors': factors, 'method': method},
+                exception=e
             )
-        
-        try:
-            # Process with fallback agent
-            fallback_result = fallback_agent.process(prompt, context, history, feedback)
-            
-            # Modify the result to indicate fallback was used
-            fallback_result.agent_name = f"{self.name} (fallback)"
-            
-            # Add fallback information to analysis
-            if fallback_result.analysis is None:
-                fallback_result.analysis = {}
-            
-            fallback_result.analysis['fallback_used'] = True
-            fallback_result.analysis['llm_error'] = llm_error
-            fallback_result.analysis['fallback_agent'] = fallback_agent.name
-            
-            # Reduce confidence score to indicate fallback was used
-            if fallback_result.confidence_score > 0:
-                fallback_result.confidence_score *= 0.8  # Reduce confidence by 20%
-            
-            # Add fallback notice to suggestions
-            if fallback_result.suggestions is None:
-                fallback_result.suggestions = []
-            
-            fallback_result.suggestions.insert(0, 
-                f"Note: LLM processing failed ({llm_error}), using heuristic fallback analysis")
-            
-            return fallback_result
-            
-        except Exception as e:
-            return AgentResult(
-                agent_name=self.name,
-                success=False,
-                analysis={},
-                suggestions=[],
-                confidence_score=0.0,
-                error_message=f"Both LLM and fallback processing failed. LLM error: {llm_error}, Fallback error: {str(e)}"
-            )
+            return fallback_confidence
     
     def _prepare_full_prompt(self, user_prompt: str, context: Optional[Dict[str, Any]] = None) -> str:
         """
@@ -368,148 +514,37 @@ class LLMAgent(Agent):
         
         return "\n".join(context_parts)
     
-    def _simulate_llm_response(self, full_prompt: str) -> str:
+    def _execute_bedrock_call(self, full_prompt: str) -> str:
         """
-        Simulate an LLM response for testing purposes.
-        
-        In a real implementation, this would be replaced with actual LLM API calls.
+        Execute the actual Bedrock API call.
         
         Args:
-            full_prompt: The complete prompt sent to the LLM
+            full_prompt: The complete prompt to send to the model
             
         Returns:
-            Simulated LLM response
-        """
-        # This is a placeholder that generates a structured response
-        # based on the agent type and prompt content
-        
-        agent_type = self.name.lower()
-        
-        if 'analyzer' in agent_type:
-            return self._simulate_analyzer_response(full_prompt)
-        elif 'refiner' in agent_type:
-            return self._simulate_refiner_response(full_prompt)
-        elif 'validator' in agent_type:
-            return self._simulate_validator_response(full_prompt)
-        else:
-            return "LLM analysis completed with structured reasoning and best practices applied."
-    
-    def _simulate_analyzer_response(self, prompt: str) -> str:
-        """Simulate analyzer LLM response."""
-        return """
-        Analysis Results:
-        
-        Structure Assessment:
-        - The prompt has a clear task definition
-        - Context information could be enhanced
-        - Examples would improve clarity
-        
-        Clarity Evaluation:
-        - Language is generally clear and direct
-        - Some technical terms may need explanation
-        - Action verbs are well-defined
-        
-        Best Practices Applied:
-        - Evaluated against prompt engineering standards
-        - Checked for completeness and specificity
-        - Assessed readability and actionability
-        
-        Recommendations:
-        1. Add specific examples to illustrate expected output
-        2. Include context section for background information
-        3. Define success criteria more explicitly
-        """
-    
-    def _simulate_refiner_response(self, prompt: str) -> str:
-        """Simulate refiner LLM response."""
-        return """
-        Refined Prompt Suggestion:
-        
-        ## Task
-        [Enhanced task definition with clearer instructions]
-        
-        ## Context
-        [Added background information and use case details]
-        
-        ## Requirements
-        - Specific requirement 1
-        - Specific requirement 2
-        - Output format specification
-        
-        ## Example
-        [Concrete example of expected output]
-        
-        Improvements Made:
-        - Enhanced structure with clear sections
-        - Added specific examples and context
-        - Clarified success criteria and constraints
-        - Applied prompt engineering best practices
-        """
-    
-    def _simulate_validator_response(self, prompt: str) -> str:
-        """Simulate validator LLM response."""
-        return """
-        Validation Results:
-        
-        Syntax Check: PASS
-        - No formatting issues detected
-        - Proper structure and organization
-        
-        Logical Consistency: PASS
-        - No contradictions found
-        - Instructions flow logically
-        
-        Completeness Assessment: MINOR ISSUES
-        - Task definition is clear
-        - Output format could be more specific
-        - Success criteria need enhancement
-        
-        Quality Score: 8.2/10
-        
-        Recommendations:
-        1. Add more specific output format requirements
-        2. Define measurable success criteria
-        3. Consider adding edge case handling instructions
-        """
-    
-    def _parse_llm_response(self, response: str) -> Dict[str, Any]:
-        """
-        Parse the LLM response into structured data.
-        
-        Args:
-            response: Raw LLM response string
+            The response text from the model
             
-        Returns:
-            Parsed response as structured dictionary
+        Raises:
+            Exception: If the Bedrock call fails
         """
-        # Try to extract structured information from the response
-        parsed = {
-            'raw_response': response,
-            'analysis': {},
-            'recommendations': [],
-            'confidence': 0.8,  # Default confidence
-            'reasoning': ''
-        }
+        # Create model configuration
+        model_config = ModelConfig(
+            model_id=self.llm_model,
+            max_tokens=self.llm_max_tokens,
+            temperature=self.llm_temperature,
+            top_p=0.9,
+            top_k=250
+        )
         
-        # Extract recommendations (lines starting with numbers or bullets)
-        import re
-        recommendations = re.findall(r'^\s*[\d\-\*]\.\s*(.+)$', response, re.MULTILINE)
-        parsed['recommendations'] = recommendations
+        # Execute the prompt
+        result = self.bedrock_executor.execute_prompt(full_prompt, model_config)
         
-        # Extract confidence if mentioned
-        confidence_match = re.search(r'confidence[:\s]+(\d+(?:\.\d+)?)', response, re.IGNORECASE)
-        if confidence_match:
-            parsed['confidence'] = float(confidence_match.group(1))
-            if parsed['confidence'] > 1.0:  # Handle percentage format
-                parsed['confidence'] /= 100.0
+        if not result.success:
+            raise Exception(f"Bedrock execution failed: {result.error_message}")
         
-        # Extract reasoning sections
-        reasoning_sections = re.findall(r'(reasoning|analysis|assessment)[:\s]*\n(.+?)(?=\n\n|\n[A-Z]|\Z)', 
-                                      response, re.IGNORECASE | re.DOTALL)
-        if reasoning_sections:
-            parsed['reasoning'] = '\n'.join([section[1].strip() for section in reasoning_sections])
-        
-        return parsed
+        return result.response_text
+    
+
     
     def update_system_prompt(self, new_template: str) -> None:
         """
@@ -549,3 +584,62 @@ class LLMAgent(Agent):
         """
         self.reasoning_framework = framework
         self.system_prompt = self._build_system_prompt()
+    
+
+    
+    def _handle_llm_failure(self, 
+                           prompt: str, 
+                           context: Optional[Dict[str, Any]] = None,
+                           history: Optional[List[PromptIteration]] = None,
+                           feedback: Optional[UserFeedback] = None,
+                           error_reason: str = "LLM service unavailable") -> None:
+        """
+        Handle LLM failure by logging and raising an appropriate exception.
+        
+        Args:
+            prompt: The prompt that failed to process
+            context: Optional context information
+            history: Optional prompt history
+            feedback: Optional user feedback
+            error_reason: Reason for the failure
+            
+        Raises:
+            Exception: Always raises an exception with detailed error information
+        """
+        # Enhanced failure logging
+        failure_context = {
+            'prompt_length': len(prompt),
+            'has_context': context is not None,
+            'has_history': history is not None and len(history) > 0 if history else False,
+            'has_feedback': feedback is not None,
+            'agent_type': self.name,
+            'model': self.llm_model,
+            'temperature': self.llm_temperature,
+            'max_tokens': self.llm_max_tokens
+        }
+        
+        # Log the LLM failure
+        self.llm_logger.log_error(
+            error_type='llm_service_failure',
+            error_message=f"LLM service failed after retries: {error_reason}",
+            context=failure_context
+        )
+        
+        # Log service failure details
+        self.llm_logger.log_llm_service_failure(
+            error_details={
+                'error_type': 'service_unavailable',
+                'error_message': error_reason,
+                'model': self.llm_model,
+                'prompt_length': len(prompt),
+                'agent_name': self.name
+            },
+            fallback_action="No fallback available - raising exception"
+        )
+        
+        # Raise a detailed exception
+        raise Exception(
+            f"LLM service failure in {self.name}: {error_reason}. "
+            f"Model: {self.llm_model}, Prompt length: {len(prompt)} characters. "
+            f"No fallback available - ensure Bedrock service is accessible and properly configured."
+        )

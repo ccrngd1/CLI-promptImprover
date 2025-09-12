@@ -8,6 +8,7 @@ user feedback, and embedded prompt engineering best practices.
 
 from typing import Dict, Any, List, Optional
 from agents.llm_agent import LLMAgent
+from agents.llm_agent_logger import LLMAgentLogger
 from agents.base import AgentResult
 from models import PromptIteration, UserFeedback
 
@@ -26,6 +27,9 @@ class LLMRefinerAgent(LLMAgent):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """Initialize the LLMRefinerAgent."""
         super().__init__("LLMRefinerAgent", config)
+        
+        # Initialize specialized logger for LLM interactions
+        self.llm_logger = LLMAgentLogger("LLMRefinerAgent")
         
         # Refinement-specific configuration
         self.refinement_style = self.config.get('refinement_style', 'comprehensive')
@@ -61,44 +65,152 @@ class LLMRefinerAgent(LLMAgent):
             )
         
         try:
+            # Extract session context for logging
+            session_id = context.get('session_id') if context else None
+            iteration = context.get('iteration') if context else None
+            
             # Prepare refinement prompt for LLM
             refinement_prompt = self._build_refinement_prompt(prompt, context, history, feedback)
+            
+            # Log the LLM call with refinement context
+            self.llm_logger.log_llm_call(
+                prompt=refinement_prompt,
+                context=context,
+                session_id=session_id,
+                iteration=iteration,
+                model_config={'agent_type': 'refiner', 'task': 'prompt_refinement'}
+            )
             
             # Call LLM for refinement
             llm_response = self._call_llm(refinement_prompt, context)
             
-            # Check if fallback should be used
-            if self._should_use_fallback(llm_response):
-                return self._process_with_fallback_agent(prompt, context, history, feedback, 
-                                                       llm_response.get('error', 'LLM service unavailable'))
+            # Log the LLM response
+            self.llm_logger.log_llm_response(
+                response=llm_response,
+                session_id=session_id,
+                iteration=iteration
+            )
             
+            # Check if fallback should be used
+            # Check if LLM call failed and handle error
             if not llm_response['success']:
-                return AgentResult(
-                    agent_name=self.name,
-                    success=False,
-                    analysis={},
-                    suggestions=[],
-                    confidence_score=0.0,
-                    error_message=f"LLM refinement failed: {llm_response['error']}"
+                self.llm_logger.log_error(
+                    error_type="llm_refinement_failed",
+                    error_message=llm_response.get('error', 'Unknown LLM error'),
+                    context={'session_id': session_id, 'iteration': iteration}
                 )
+                self._handle_llm_failure(prompt, context, history, feedback, 
+                                         llm_response.get('error', 'LLM service unavailable'))
             
             # Parse and extract the refined prompt
             parsed_response = self._parse_llm_response(llm_response['response'])
             
+            # Log parsing results
+            parsing_success = parsed_response.get('success', True)
+            parsing_errors = parsed_response.get('errors', [])
+            self.llm_logger.log_parsed_response(
+                parsed_data=parsed_response,
+                session_id=session_id,
+                iteration=iteration,
+                parsing_success=parsing_success,
+                parsing_errors=parsing_errors
+            )
+            
+            # Log raw LLM feedback for orchestration debugging
+            self.llm_logger.log_orchestration_raw_feedback(
+                agent_name='LLMRefinerAgent',
+                raw_llm_response=llm_response['response'],
+                parsed_data=parsed_response,
+                session_id=session_id,
+                iteration=iteration
+            )
+            
             # Extract the refined prompt and improvements
             refined_prompt = self._extract_refined_prompt(parsed_response)
+            
+            # Log refined prompt extraction
+            extraction_success = refined_prompt != "No refined prompt could be extracted from LLM response."
+            self.llm_logger.log_component_extraction(
+                component_type="refined_prompt",
+                extracted_data=refined_prompt,
+                success=extraction_success,
+                extraction_method="regex_pattern_matching"
+            )
             
             # Analyze the improvements made
             improvements_analysis = self._analyze_refinement_quality(
                 prompt, refined_prompt, parsed_response, llm_response
             )
             
+            # Log refinement quality analysis
+            self.llm_logger.log_component_extraction(
+                component_type="improvement_analysis",
+                extracted_data=improvements_analysis,
+                success=improvements_analysis.get('extraction_successful', False),
+                extraction_method="quality_assessment",
+                confidence=improvements_analysis.get('quality_score', 0.0)
+            )
+            
             # Generate suggestions for further refinement
             suggestions = self._extract_refinement_suggestions(parsed_response)
+            
+            # Log refinement suggestions extraction
+            self.llm_logger.log_component_extraction(
+                component_type="refinement_suggestions",
+                extracted_data=suggestions,
+                success=len(suggestions) > 0,
+                extraction_method="pattern_extraction"
+            )
+            
+            # Extract and log best practices applied
+            best_practices = self._extract_best_practices_applied(parsed_response)
+            self.llm_logger.log_agent_reasoning(
+                reasoning_type="best_practices_applied",
+                reasoning_text=f"Applied {len(best_practices)} best practices: {', '.join(best_practices)}",
+                metadata={
+                    'practices_count': len(best_practices),
+                    'practices_list': best_practices,
+                    'session_id': session_id,
+                    'iteration': iteration
+                }
+            )
+            
+            # Log refinement reasoning from LLM response
+            improvements_explanation = improvements_analysis.get('improvements_explanation', '')
+            if improvements_explanation:
+                self.llm_logger.log_agent_reasoning(
+                    reasoning_type="refinement_reasoning",
+                    reasoning_text=improvements_explanation,
+                    metadata={
+                        'reasoning_source': 'llm_response',
+                        'quality_score': improvements_analysis.get('quality_score', 0.0),
+                        'session_id': session_id,
+                        'iteration': iteration
+                    }
+                )
             
             # Calculate confidence in the refinement
             confidence_score = self._calculate_refinement_confidence(
                 parsed_response, improvements_analysis
+            )
+            
+            # Log confidence calculation with refinement quality factors
+            confidence_factors = {
+                'extraction_success': float(improvements_analysis.get('extraction_successful', False)),
+                'quality_score': improvements_analysis.get('quality_score', 0.0),
+                'best_practices_count': len(best_practices) / 10.0,  # Normalize to 0-1
+                'structural_improvements': float(improvements_analysis.get('structural_improvements', False)),
+                'clarity_improvements': float(improvements_analysis.get('clarity_improvements', False)),
+                'completeness_improvements': float(improvements_analysis.get('completeness_improvements', False))
+            }
+            
+            self.llm_logger.log_confidence_calculation(
+                confidence_score=confidence_score,
+                reasoning=f"Confidence based on refinement quality analysis: {improvements_analysis.get('quality_score', 0.0):.2f}, "
+                         f"extraction success: {improvements_analysis.get('extraction_successful', False)}, "
+                         f"best practices applied: {len(best_practices)}",
+                factors=confidence_factors,
+                calculation_method="refinement_quality_weighted"
             )
             
             # Compile analysis
@@ -114,8 +226,28 @@ class LLMRefinerAgent(LLMAgent):
                 },
                 'improvements_analysis': improvements_analysis,
                 'refinement_quality': self._assess_refinement_quality(improvements_analysis),
-                'best_practices_applied': self._extract_best_practices_applied(parsed_response)
+                'best_practices_applied': best_practices
             }
+            
+            # Log the complete refinement analysis
+            self.llm_logger.log_agent_reasoning(
+                reasoning_type="refinement_analysis_complete",
+                reasoning_text=f"Refinement completed with quality: {analysis['refinement_quality']}. "
+                              f"Applied {len(best_practices)} best practices. "
+                              f"Confidence: {confidence_score:.3f}",
+                metadata={
+                    'analysis_summary': {
+                        'original_length': len(prompt),
+                        'refined_length': len(refined_prompt),
+                        'length_change': improvements_analysis.get('length_change', 0),
+                        'quality_score': improvements_analysis.get('quality_score', 0.0),
+                        'extraction_successful': improvements_analysis.get('extraction_successful', False)
+                    },
+                    'session_id': session_id,
+                    'iteration': iteration,
+                    'final_confidence': confidence_score
+                }
+            )
             
             return AgentResult(
                 agent_name=self.name,
@@ -126,18 +258,26 @@ class LLMRefinerAgent(LLMAgent):
             )
             
         except Exception as e:
-            # Try fallback if enabled
-            if self.config.get('fallback_to_heuristic', True) and self.config.get('llm_only_mode', False):
-                return self._process_with_fallback_agent(prompt, context, history, feedback, str(e))
+            # Log the exception
+            session_id = context.get('session_id') if context else None
+            iteration = context.get('iteration') if context else None
             
-            return AgentResult(
-                agent_name=self.name,
-                success=False,
-                analysis={},
-                suggestions=[],
-                confidence_score=0.0,
-                error_message=f"LLM refinement failed: {str(e)}"
+            self.llm_logger.log_error(
+                error_type="refinement_processing_exception",
+                error_message=str(e),
+                context={
+                    'session_id': session_id,
+                    'iteration': iteration,
+                    'prompt_length': len(prompt) if prompt else 0,
+                    'has_context': context is not None,
+                    'has_history': history is not None and len(history) > 0,
+                    'has_feedback': feedback is not None
+                },
+                exception=e
             )
+            
+            # Handle the exception by raising it with detailed context
+            self._handle_llm_failure(prompt, context, history, feedback, str(e))
     
     def _get_base_system_prompt(self) -> str:
         """Get the base system prompt for LLM refinement."""
@@ -326,9 +466,9 @@ Present your refined prompt clearly marked, followed by detailed explanation of 
         
         # Fallback: look for other prompt markers
         fallback_patterns = [
-            r'improved prompt[:\s]*\n(.*?)(?=\n\n|\nIMPROVEMENTS|\nBEST PRACTICES|\Z)',
-            r'refined version[:\s]*\n(.*?)(?=\n\n|\nIMPROVEMENTS|\nBEST PRACTICES|\Z)',
-            r'optimized prompt[:\s]*\n(.*?)(?=\n\n|\nIMPROVEMENTS|\nBEST PRACTICES|\Z)'
+            r'improved prompt[:\s]*\n(.*?)(?=\nIMPROVEMENTS|\nBEST PRACTICES|\Z)',
+            r'refined version[:\s]*\n(.*?)(?=\nIMPROVEMENTS|\nBEST PRACTICES|\Z)',
+            r'optimized prompt[:\s]*\n(.*?)(?=\nIMPROVEMENTS|\nBEST PRACTICES|\Z)'
         ]
         
         for pattern in fallback_patterns:
@@ -344,6 +484,13 @@ Present your refined prompt clearly marked, followed by detailed explanation of 
                                   llm_response: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze the quality of the refinement."""
         if refined == "No refined prompt could be extracted from LLM response.":
+            # Log failed extraction
+            self.llm_logger.log_component_extraction(
+                component_type="refinement_quality_analysis",
+                extracted_data=None,
+                success=False,
+                extraction_method="quality_assessment"
+            )
             return {
                 'extraction_successful': False,
                 'length_change': 0,
@@ -387,6 +534,32 @@ Present your refined prompt clearly marked, followed by detailed explanation of 
         
         quality_score = sum(quality_factors) / len(quality_factors)
         
+        # Log the quality analysis process
+        self.llm_logger.log_agent_reasoning(
+            reasoning_type="improvement_quality_analysis",
+            reasoning_text=f"Quality analysis completed: structural={structural_improvements}, "
+                          f"clarity={clarity_improvements}, completeness={completeness_improvements}, "
+                          f"detailed_explanation={len(improvements_text) > 50}, "
+                          f"reasonable_length_change={length_change_ratio > 0.5}. "
+                          f"Overall quality score: {quality_score:.3f}",
+            metadata={
+                'quality_factors': {
+                    'structural_improvements': structural_improvements,
+                    'clarity_improvements': clarity_improvements,
+                    'completeness_improvements': completeness_improvements,
+                    'has_detailed_explanation': len(improvements_text) > 50,
+                    'reasonable_length_change': length_change_ratio > 0.5
+                },
+                'metrics': {
+                    'length_change': length_change,
+                    'length_change_ratio': length_change_ratio,
+                    'original_sections': original_sections,
+                    'refined_sections': refined_sections,
+                    'explanation_length': len(improvements_text)
+                }
+            }
+        )
+        
         return {
             'extraction_successful': True,
             'length_change': length_change,
@@ -406,9 +579,9 @@ Present your refined prompt clearly marked, followed by detailed explanation of 
         
         # Look for improvements section
         improvements_patterns = [
-            r'IMPROVEMENTS MADE[:\s]*\n(.*?)(?=\n\n|\nBEST PRACTICES|\nCONFIDENCE|\Z)',
-            r'improvements[:\s]*\n(.*?)(?=\n\n|\nBEST PRACTICES|\nCONFIDENCE|\Z)',
-            r'changes made[:\s]*\n(.*?)(?=\n\n|\nBEST PRACTICES|\nCONFIDENCE|\Z)'
+            r'IMPROVEMENTS MADE[:\s]*\n(.*?)(?=\nBEST PRACTICES|\nCONFIDENCE|\Z)',
+            r'improvements[:\s]*\n(.*?)(?=\nBEST PRACTICES|\nCONFIDENCE|\Z)',
+            r'changes made[:\s]*\n(.*?)(?=\nBEST PRACTICES|\nCONFIDENCE|\Z)'
         ]
         
         for pattern in improvements_patterns:
@@ -426,7 +599,7 @@ Present your refined prompt clearly marked, followed by detailed explanation of 
         
         # Look for best practices section
         best_practices_match = re.search(
-            r'BEST PRACTICES APPLIED[:\s]*\n(.*?)(?=\n\n|\nCONFIDENCE|\Z)',
+            r'BEST PRACTICES APPLIED[:\s]*\n(.*?)(?=\nCONFIDENCE|\Z)',
             raw_response,
             re.DOTALL | re.IGNORECASE
         )
@@ -486,6 +659,7 @@ Present your refined prompt clearly marked, followed by detailed explanation of 
                                        improvements_analysis: Dict[str, Any]) -> float:
         """Calculate confidence in the refinement quality."""
         base_confidence = parsed_response.get('confidence', 0.8)
+        original_confidence = base_confidence
         
         # Adjust based on refinement quality
         if improvements_analysis.get('extraction_successful', False):
@@ -498,19 +672,53 @@ Present your refined prompt clearly marked, followed by detailed explanation of 
         response_text = parsed_response['raw_response']
         
         # Higher confidence for detailed explanations
+        explanation_bonus = 0.0
         if len(improvements_analysis.get('improvements_explanation', '')) > 200:
-            base_confidence += 0.1
+            explanation_bonus = 0.1
+            base_confidence += explanation_bonus
         
         # Higher confidence for multiple best practices applied
         best_practices_count = len(self._extract_best_practices_applied(parsed_response))
+        practices_bonus = 0.0
         if best_practices_count >= 3:
-            base_confidence += 0.1
+            practices_bonus = 0.1
+            base_confidence += practices_bonus
         
         # Lower confidence for minimal changes
+        length_penalty = 0.0
         if improvements_analysis.get('length_change', 0) < 50:
-            base_confidence -= 0.1
+            length_penalty = -0.1
+            base_confidence += length_penalty
         
-        return min(1.0, max(0.0, base_confidence))
+        final_confidence = min(1.0, max(0.0, base_confidence))
+        
+        # Log the confidence calculation details
+        self.llm_logger.log_agent_reasoning(
+            reasoning_type="confidence_calculation_details",
+            reasoning_text=f"Confidence calculation: base={original_confidence:.3f}, "
+                          f"quality_adjusted={(original_confidence + improvements_analysis.get('quality_score', 0.5))/2:.3f}, "
+                          f"explanation_bonus={explanation_bonus:.3f}, "
+                          f"practices_bonus={practices_bonus:.3f}, "
+                          f"length_penalty={length_penalty:.3f}, "
+                          f"final={final_confidence:.3f}",
+            metadata={
+                'confidence_components': {
+                    'original_llm_confidence': original_confidence,
+                    'quality_score': improvements_analysis.get('quality_score', 0.5),
+                    'extraction_successful': improvements_analysis.get('extraction_successful', False),
+                    'explanation_length': len(improvements_analysis.get('improvements_explanation', '')),
+                    'best_practices_count': best_practices_count,
+                    'length_change': improvements_analysis.get('length_change', 0)
+                },
+                'adjustments': {
+                    'explanation_bonus': explanation_bonus,
+                    'practices_bonus': practices_bonus,
+                    'length_penalty': length_penalty
+                }
+            }
+        )
+        
+        return final_confidence
     
     def _assess_refinement_quality(self, improvements_analysis: Dict[str, Any]) -> str:
         """Assess the overall quality of the refinement."""

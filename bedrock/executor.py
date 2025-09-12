@@ -59,27 +59,7 @@ class BedrockExecutor:
     error handling, rate limiting, and support for multiple model types.
     """
     
-    # Supported model configurations
-    SUPPORTED_MODELS = {
-        "anthropic.claude-3-sonnet-20240229-v1:0": {
-            "name": "Claude 3 Sonnet",
-            "provider": "anthropic",
-            "input_cost_per_1k": 0.003,
-            "output_cost_per_1k": 0.015
-        },
-        "anthropic.claude-3-haiku-20240307-v1:0": {
-            "name": "Claude 3 Haiku", 
-            "provider": "anthropic",
-            "input_cost_per_1k": 0.00025,
-            "output_cost_per_1k": 0.00125
-        },
-        "amazon.titan-text-express-v1": {
-            "name": "Titan Text Express",
-            "provider": "amazon",
-            "input_cost_per_1k": 0.0008,
-            "output_cost_per_1k": 0.0016
-        }
-    }
+
     
     def __init__(self, region_name: str = "us-east-1", 
                  aws_access_key_id: Optional[str] = None,
@@ -158,29 +138,20 @@ class BedrockExecutor:
             
             for model in response.get('modelSummaries', []):
                 model_id = model.get('modelId', '')
-                if model_id in self.SUPPORTED_MODELS:
-                    model_info = {
-                        'model_id': model_id,
-                        'model_name': model.get('modelName', ''),
-                        'provider_name': model.get('providerName', ''),
-                        'supported': True,
-                        **self.SUPPORTED_MODELS[model_id]
-                    }
-                    models.append(model_info)
+                model_info = {
+                    'model_id': model_id,
+                    'model_name': model.get('modelName', ''),
+                    'provider_name': model.get('providerName', ''),
+                    'supported': True
+                }
+                models.append(model_info)
             
             return models
             
         except ClientError as e:
             self.logger.error(f"Failed to list models: {str(e)}")
-            # Return supported models list as fallback
-            return [
-                {
-                    'model_id': model_id,
-                    'supported': True,
-                    **info
-                }
-                for model_id, info in self.SUPPORTED_MODELS.items()
-            ]
+            # Return empty list as fallback
+            return []
     
     def _handle_rate_limits(self) -> None:
         """Implement rate limiting to avoid API throttling."""
@@ -317,15 +288,7 @@ class BedrockExecutor:
                 error_message="Empty prompt provided"
             )
         
-        if model_config.model_id not in self.SUPPORTED_MODELS:
-            return ExecutionResult(
-                model_name=model_config.model_id,
-                response_text="",
-                execution_time=0.0,
-                token_usage={'input_tokens': 0, 'output_tokens': 0},
-                success=False,
-                error_message=f"Unsupported model: {model_config.model_id}"
-            )
+
         
         start_time = time.time()
         
@@ -428,9 +391,6 @@ class BedrockExecutor:
             True if configuration is valid, False otherwise
         """
         if not model_config.model_id:
-            return False
-        
-        if model_config.model_id not in self.SUPPORTED_MODELS:
             return False
         
         if not (1 <= model_config.max_tokens <= 4096):

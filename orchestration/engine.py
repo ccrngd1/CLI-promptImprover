@@ -80,6 +80,7 @@ class OrchestrationResult:
             'agent_results': {name: {
                 'agent_name': result.agent_name,
                 'success': result.success,
+                'analysis': result.analysis,
                 'suggestions': result.suggestions,
                 'confidence_score': result.confidence_score,
                 'error_message': result.error_message
@@ -1443,7 +1444,7 @@ class LLMOrchestrationEngine:
         try:
             # Extract optimized prompt
             prompt_match = re.search(
-                r'OPTIMIZED PROMPT[:\s]*\n(.*?)(?=\n\n|\nCONFIDENCE|\Z)',
+                r'OPTIMIZED PROMPT[:\s]*\n(.*?)(?=\nCONFIDENCE|\Z)',
                 llm_response,
                 re.DOTALL | re.IGNORECASE
             )
@@ -1454,7 +1455,7 @@ class LLMOrchestrationEngine:
             
             # Extract synthesis reasoning
             reasoning_match = re.search(
-                r'SYNTHESIS REASONING[:\s]*\n(.*?)(?=\n\n|\nORCHESTRATION|\nOPTIMIZED|\Z)',
+                r'SYNTHESIS REASONING[:\s]*\n(.*?)(?=\nORCHESTRATION|\nOPTIMIZED|\Z)',
                 llm_response,
                 re.DOTALL | re.IGNORECASE
             )
@@ -1463,7 +1464,7 @@ class LLMOrchestrationEngine:
             
             # Extract orchestration decisions
             decisions_match = re.search(
-                r'ORCHESTRATION DECISIONS[:\s]*\n(.*?)(?=\n\n|\nOPTIMIZED|\nCONFIDENCE|\Z)',
+                r'ORCHESTRATION DECISIONS[:\s]*\n(.*?)(?=\nOPTIMIZED|\nCONFIDENCE|\Z)',
                 llm_response,
                 re.DOTALL | re.IGNORECASE
             )

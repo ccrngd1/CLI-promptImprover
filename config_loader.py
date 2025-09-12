@@ -49,8 +49,6 @@ class ConfigurationLoader:
         Args:
             config_path: Optional path to configuration file
         """
-        self.logger = get_logger('config_loader')
-        
         # Lazy import to avoid circular dependencies
         from cli.config import ConfigManager
         self._config_manager = ConfigManager(config_path)
@@ -59,9 +57,17 @@ class ConfigurationLoader:
         self._change_listeners = []
         self._last_reload_time = None
         self._file_watch_enabled = False
+        self._logging_configured = False
+        
+        # Create logger first (it will be reconfigured later)
+        self.logger = get_logger('config_loader')
         
         # Load initial configuration
         self._load_initial_config()
+        
+        # Initialize logging with configuration
+        self._setup_logging_from_config()
+        self._logging_configured = True
     
     def _load_initial_config(self):
         """Load the initial configuration."""
@@ -341,6 +347,61 @@ class ConfigurationLoader:
         """
         return self._last_reload_time
     
+    def _setup_logging_from_config(self):
+        """Set up logging using configuration values."""
+        try:
+            # Temporarily set root logger to ERROR to suppress initialization messages
+            import logging
+            root_logger = logging.getLogger()
+            root_logger.setLevel(logging.ERROR)
+            
+            # Lazy import to avoid circular dependencies
+            from logging_config import setup_logging
+            
+            logging_config = self._current_config.get('logging', {})
+            
+            # Extract logging parameters
+            log_level = logging_config.get('level', 'INFO')
+            log_dir = logging_config.get('log_dir')
+            enable_structured_logging = logging_config.get('enable_structured_logging', True)
+            enable_performance_logging = logging_config.get('enable_performance_logging', True)
+            llm_logging_config = logging_config.get('llm_logging', {})
+            
+            # Set up logging - this will override the temporary ERROR level
+            setup_logging(
+                log_level=log_level,
+                log_dir=log_dir,
+                enable_structured_logging=enable_structured_logging,
+                enable_performance_logging=enable_performance_logging,
+                llm_logging_config=llm_logging_config
+            )
+            
+        except Exception as e:
+            # Fallback to basic logging if configuration fails
+            import logging
+            logging.basicConfig(level=logging.INFO)
+            print(f"Failed to configure logging from config: {str(e)}")
+    
+    def get_logging_config(self) -> Dict[str, Any]:
+        """
+        Get the logging-specific configuration.
+        
+        Returns:
+            Dictionary containing logging configuration
+        """
+        with self._config_lock:
+            return self._current_config.get('logging', {})
+    
+    def get_llm_logging_config(self) -> Dict[str, Any]:
+        """
+        Get the LLM logging-specific configuration.
+        
+        Returns:
+            Dictionary containing LLM logging configuration
+        """
+        with self._config_lock:
+            return self._current_config.get('logging', {}).get('llm_logging', {})
+    
     def export_config(self, export_path: str, format_type: str = 'json') -> Dict[str, Any]:
         """
         Export current configuration to a file.
@@ -436,3 +497,23 @@ def update_config_runtime(changes: Dict[str, Any]) -> Dict[str, Any]:
         Results of the update operation
     """
     return get_config_loader().update_config(changes)
+
+
+def get_llm_logging_config() -> Dict[str, Any]:
+    """
+    Get LLM logging configuration using the global loader.
+    
+    Returns:
+        LLM logging configuration dictionary
+    """
+    return get_config_loader().get_llm_logging_config()
+
+
+def get_logging_config() -> Dict[str, Any]:
+    """
+    Get logging configuration using the global loader.
+    
+    Returns:
+        Logging configuration dictionary
+    """
+    return get_config_loader().get_logging_config()

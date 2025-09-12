@@ -35,6 +35,7 @@ from bedrock.executor import BedrockExecutor, ModelConfig
 from evaluation.evaluator import Evaluator
 from storage.history import HistoryManager
 from cli.config import ConfigManager
+from config_loader import ConfigurationLoader
 
 
 class CLIFormatter:
@@ -105,13 +106,34 @@ class CLIFormatter:
         
         tree = Tree("🎭 Orchestration Results")
         
-        # Agent results
+        # Agent results with raw LLM feedback
         if 'agent_results' in orchestration_result:
             agents_branch = tree.add("🤖 Agent Results")
             for agent_name, result in orchestration_result['agent_results'].items():
                 agent_branch = agents_branch.add(f"[bold]{agent_name.title()}[/bold]")
                 agent_branch.add(f"✅ Success: {result.get('success', False)}")
                 agent_branch.add(f"🎯 Confidence: {result.get('confidence_score', 0):.2f}")
+                
+                # Show raw LLM feedback if available
+                analysis = result.get('analysis', {})
+                if isinstance(analysis, dict):
+                    # Check for LLM validation/analysis/refinement data
+                    llm_data = (analysis.get('llm_validation') or 
+                               analysis.get('llm_analysis') or 
+                               analysis.get('llm_refinement'))
+                    
+                    if llm_data and isinstance(llm_data, dict):
+                        raw_response = llm_data.get('raw_response', '')
+                        if raw_response:
+                            llm_branch = agent_branch.add("🧠 Raw LLM Feedback")
+                            # Show full response without truncation
+                            llm_branch.add(f"[dim]{raw_response}[/dim]")
+                            
+                            # Show model and token usage
+                            if llm_data.get('model_used'):
+                                llm_branch.add(f"🤖 Model: {llm_data['model_used']}")
+                            if llm_data.get('tokens_used'):
+                                llm_branch.add(f"🔢 Tokens: {llm_data['tokens_used']}")
                 
                 if result.get('suggestions'):
                     suggestions_branch = agent_branch.add("💡 Suggestions")
@@ -147,6 +169,30 @@ class CLIFormatter:
                 print(f"  {agent_name.title()}:")
                 print(f"    Success: {result.get('success', False)}")
                 print(f"    Confidence: {result.get('confidence_score', 0):.2f}")
+                
+                # Show raw LLM feedback if available
+                analysis = result.get('analysis', {})
+                if isinstance(analysis, dict):
+                    # Check for LLM validation/analysis/refinement data
+                    llm_data = (analysis.get('llm_validation') or 
+                               analysis.get('llm_analysis') or 
+                               analysis.get('llm_refinement'))
+                    
+                    if llm_data and isinstance(llm_data, dict):
+                        raw_response = llm_data.get('raw_response', '')
+                        if raw_response:
+                            print("    Raw LLM Feedback:")
+                            # Show full response without truncation
+                            # Indent the response for readability
+                            for line in raw_response.split('\n'):
+                                print(f"      {line}")
+                            
+                            # Show model and token usage
+                            if llm_data.get('model_used'):
+                                print(f"      Model: {llm_data['model_used']}")
+                            if llm_data.get('tokens_used'):
+                                print(f"      Tokens: {llm_data['tokens_used']}")
+                
                 if result.get('suggestions'):
                     print("    Suggestions:")
                     for suggestion in result['suggestions'][:3]:
@@ -167,25 +213,23 @@ class PromptOptimizerCLI:
     def __init__(self):
         self.formatter = CLIFormatter()
         self.config_manager = ConfigManager()
+        self.config_loader = None  # Will be set when config path is provided
         self.session_manager = None
         self.bedrock_executor = None
         self.evaluator = None
         self.history_manager = None
         self._components_initialized = False
         
-        # Try to initialize components, but don't fail if it doesn't work
-        # (e.g., for help commands or config commands that don't need AWS)
-        try:
-            self._initialize_components()
-            self._components_initialized = True
-        except Exception:
-            # Components will be initialized on demand if needed
-            pass
+        # Don't initialize components in constructor - wait for config to be set
+        # Components will be initialized on demand when needed
     
     def _initialize_components(self):
         """Initialize the core components based on configuration."""
-        # Load configuration
-        config = self.config_manager.load_config()
+        # Load configuration - use ConfigurationLoader if available for proper logging setup
+        if self.config_loader:
+            config = self.config_loader.get_config()
+        else:
+            config = self.config_manager.load_config()
         
         # Initialize Bedrock executor
         bedrock_config = config.get('bedrock', {})
@@ -209,7 +253,8 @@ class PromptOptimizerCLI:
             bedrock_executor=self.bedrock_executor,
             evaluator=self.evaluator,
             history_manager=self.history_manager,
-            orchestration_config=orchestration_config
+            orchestration_config=orchestration_config,
+            full_config=config  # Pass full config to ensure optimization settings are available
         )
     
     def _ensure_components_initialized(self):
@@ -311,6 +356,14 @@ Examples:
         if parsed_args.no_color:
             self.formatter.use_rich = False
         
+        # Handle config path if provided - do this FIRST to set up logging properly
+        if hasattr(parsed_args, 'config') and parsed_args.config:
+            # Use ConfigurationLoader for proper logging setup when config file is provided
+            self.config_loader = ConfigurationLoader(parsed_args.config)
+            self.config_manager = ConfigManager(parsed_args.config)
+            # Reset components initialization flag to force reinitialization with new config
+            self._components_initialized = False
+        
         # Route to appropriate command handler
         if not parsed_args.command:
             parser.print_help()
@@ -391,7 +444,7 @@ Examples:
                 break
             
             # Display results
-            self._display_iteration_results(iteration_result)
+            self._display_iteration_results(iteration_result, session_id)
             
             iteration_count += 1
             
@@ -442,7 +495,7 @@ Examples:
             progress.update(task, completed=100)
         
         if result.success:
-            self._display_iteration_results(result)
+            self._display_iteration_results(result, session_id)
         else:
             self.formatter.print(f"❌ Iteration failed: {result.message}", style="red")
     
@@ -613,12 +666,22 @@ Examples:
             except Exception as e:
                 self.formatter.print(f"❌ Export failed: {str(e)}", style="red")
     
-    def _display_iteration_results(self, result):
+    def _display_iteration_results(self, result, session_id=None):
         """Display the results of an optimization iteration."""
         if not result.iteration_result:
             return
         
         orchestration_result = result.iteration_result.to_dict()
+        
+        # Display initial prompt if session_id is provided
+        if session_id:
+            session_state = self.session_manager.get_session_state(session_id)
+            if session_state and session_state.initial_prompt:
+                self.formatter.print_panel(
+                    session_state.initial_prompt,
+                    "Initial Prompt",
+                    "blue"
+                )
         
         # Display orchestration tree
         self.formatter.print_orchestration_tree(orchestration_result)
@@ -912,6 +975,22 @@ Examples:
 
 def main():
     """Main entry point for the CLI."""
+    # Check for config argument early and set up logging before creating CLI
+    import sys
+    config_path = None
+    for i, arg in enumerate(sys.argv):
+        if arg == '--config' and i + 1 < len(sys.argv):
+            config_path = sys.argv[i + 1]
+            break
+    
+    # Set up logging early if config is provided
+    if config_path:
+        try:
+            from config_loader import ConfigurationLoader
+            ConfigurationLoader(config_path)  # This sets up logging
+        except Exception:
+            pass  # Fall back to default logging
+    
     cli = PromptOptimizerCLI()
     cli.run()
 

@@ -354,7 +354,7 @@ class TestLLMRefinerAgent(unittest.TestCase):
         """Test handling when refined prompt cannot be extracted."""
         mock_llm_call.return_value = {
             'success': True,
-            'response': "Some analysis but no clear refined prompt section",
+            'response': "This is a detailed analysis of the prompt that provides some insights and recommendations for improvement. However, it does not contain a clearly marked refined prompt section that can be extracted using the standard patterns. The analysis discusses various aspects of prompt engineering but lacks the structured format expected for extraction.",
             'model': 'claude-3-sonnet',
             'tokens_used': 100
         }

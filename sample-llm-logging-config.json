@@ -2,12 +2,12 @@
   "bedrock": {
     "region": "us-east-1",
     "profile": null,
-    "default_model": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "default_model": "global.anthropic.claude-sonnet-4-20250514-v1:0",
     "timeout": 30,
     "max_retries": 3
   },
   "orchestration": {
-    "orchestrator_model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+    "orchestrator_model": "global.anthropic.claude-sonnet-4-20250514-v1:0",
     "orchestrator_temperature": 0.3,
     "orchestrator_max_tokens": 2000,
     "min_iterations": 3,
@@ -22,7 +22,7 @@
       "clarity",
       "completeness"
     ],
-    "scoring_model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+    "scoring_model": "global.anthropic.claude-sonnet-4-20250514-v1:0",
     "evaluation_temperature": 0.1,
     "custom_metrics": {}
   },
@@ -68,12 +68,12 @@
     "fallback_to_heuristic": true
   },
   "logging": {
-    "level": "ERROR",
+    "level": "INFO",
     "log_dir": "./logs",
     "enable_structured_logging": true,
     "enable_performance_logging": true,
     "llm_logging": {
-      "level": "ERROR",
+      "level": "DEBUG",
       "log_raw_responses": true,
       "log_prompts": false,
       "max_response_log_length": 5000,
@@ -86,7 +86,10 @@
         "api_key",
         "secret",
         "token",
-        "credential"
+        "credential",
+        "auth_key",
+        "access_key",
+        "private_key"
       ],
       "truncation_indicator": "... [truncated for security/length]",
       "log_file_prefix": "llm_",

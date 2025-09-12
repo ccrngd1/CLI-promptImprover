@@ -9,6 +9,7 @@ completeness, and adherence to best practices using intelligent reasoning.
 from typing import Dict, Any, List, Optional
 from agents.llm_agent import LLMAgent
 from agents.base import AgentResult
+from agents.llm_agent_logger import LLMAgentLogger
 from models import PromptIteration, UserFeedback
 
 
@@ -26,6 +27,9 @@ class LLMValidatorAgent(LLMAgent):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """Initialize the LLMValidatorAgent."""
         super().__init__("LLMValidatorAgent", config)
+        
+        # Initialize LLM-specific logger
+        self.llm_logger = LLMAgentLogger("LLMValidatorAgent")
         
         # Validation-specific configuration
         self.validation_strictness = self.config.get('validation_strictness', 'moderate')
@@ -62,42 +66,119 @@ class LLMValidatorAgent(LLMAgent):
             )
         
         try:
+            # Get session context for logging
+            session_id = context.get('session_id') if context else None
+            iteration = len(history) + 1 if history else 1
+            
+            # Log validation process initiation
+            self.llm_logger.log_agent_reasoning(
+                'validation_start',
+                f"Starting comprehensive validation with criteria: {', '.join(self.validation_criteria)}. "
+                f"Strictness: {self.validation_strictness}, Quality threshold: {self.min_quality_threshold}",
+                {
+                    'validation_criteria': self.validation_criteria,
+                    'strictness': self.validation_strictness,
+                    'quality_threshold': self.min_quality_threshold,
+                    'prompt_length': len(prompt)
+                }
+            )
+            
             # Prepare validation prompt for LLM
             validation_prompt = self._build_validation_prompt(prompt, context, history, feedback)
             
             # Call LLM for validation
             llm_response = self._call_llm(validation_prompt, context)
             
-            # Check if fallback should be used
-            if self._should_use_fallback(llm_response):
-                return self._process_with_fallback_agent(prompt, context, history, feedback, 
-                                                       llm_response.get('error', 'LLM service unavailable'))
-            
+            # Check if LLM call failed and handle error
             if not llm_response['success']:
-                return AgentResult(
-                    agent_name=self.name,
-                    success=False,
-                    analysis={},
-                    suggestions=[],
-                    confidence_score=0.0,
-                    error_message=f"LLM validation failed: {llm_response['error']}"
+                self.llm_logger.log_error(
+                    'llm_validation_failed',
+                    f"LLM validation failed: {llm_response['error']}",
+                    {'session_id': session_id, 'iteration': iteration}
                 )
+                self._handle_llm_failure(prompt, context, history, feedback, 
+                                         llm_response.get('error', 'LLM service unavailable'))
             
             # Parse and structure the LLM response
             parsed_response = self._parse_llm_response(llm_response['response'])
             
+            # Log parsing results
+            parsing_success = parsed_response.get('success', True)
+            self.llm_logger.log_parsed_response(
+                parsed_response,
+                session_id,
+                iteration,
+                parsing_success,
+                parsed_response.get('parsing_errors', [])
+            )
+            
+            # Log raw LLM feedback for orchestration debugging
+            self.llm_logger.log_orchestration_raw_feedback(
+                agent_name='LLMValidatorAgent',
+                raw_llm_response=llm_response['response'],
+                parsed_data=parsed_response,
+                session_id=session_id,
+                iteration=iteration
+            )
+            
             # Extract validation results
             validation_results = self._extract_validation_results(parsed_response, llm_response)
+            
+            # Log validation criteria evaluation
+            self._log_validation_criteria_evaluation(validation_results, session_id, iteration)
             
             # Determine overall validation status
             passes_validation = self._determine_validation_status(validation_results)
             
+            # Log validation status determination
+            self._log_validation_status_determination(validation_results, passes_validation, session_id, iteration)
+            
             # Generate validation suggestions
             suggestions = self._extract_validation_suggestions(parsed_response)
+            
+            # Log extracted suggestions
+            self.llm_logger.log_component_extraction(
+                'validation_suggestions',
+                suggestions,
+                len(suggestions) > 0,
+                'regex_pattern_matching',
+                0.9 if len(suggestions) > 0 else 0.3
+            )
             
             # Calculate confidence in validation results
             confidence_score = self._calculate_validation_confidence(
                 parsed_response, validation_results
+            )
+            
+            # Log confidence calculation
+            confidence_factors = {
+                'overall_score': validation_results.get('overall', {}).get('score', 0.0),
+                'critical_issues_count': len(validation_results.get('critical_issues', [])),
+                'response_quality': len(parsed_response.get('raw_response', '')) / 1000.0,
+                'parsing_success': 1.0 if parsing_success else 0.0
+            }
+            self.llm_logger.log_confidence_calculation(
+                confidence_score,
+                f"Confidence based on validation completeness, response quality, and result consistency",
+                confidence_factors,
+                'validation_weighted_average'
+            )
+            
+            # Assess overall quality and log results
+            quality_assessment = self._assess_overall_quality(validation_results)
+            self._log_quality_assessment(quality_assessment, session_id, iteration)
+            
+            # Assess best practices compliance and log results
+            best_practices_compliance = self._assess_best_practices_compliance(validation_results)
+            self._log_best_practices_compliance(best_practices_compliance, session_id, iteration)
+            
+            # Generate validation summary
+            validation_summary = self._generate_validation_summary(validation_results, passes_validation)
+            
+            # Log validation reasoning and assessment results
+            self._log_validation_reasoning_and_results(
+                parsed_response, validation_results, passes_validation, 
+                quality_assessment, best_practices_compliance, session_id, iteration
             )
             
             # Compile comprehensive analysis
@@ -111,9 +192,9 @@ class LLMValidatorAgent(LLMAgent):
                 },
                 'validation_results': validation_results,
                 'passes_validation': passes_validation,
-                'validation_summary': self._generate_validation_summary(validation_results, passes_validation),
-                'quality_assessment': self._assess_overall_quality(validation_results),
-                'best_practices_compliance': self._assess_best_practices_compliance(validation_results)
+                'validation_summary': validation_summary,
+                'quality_assessment': quality_assessment,
+                'best_practices_compliance': best_practices_compliance
             }
             
             return AgentResult(
@@ -125,18 +206,26 @@ class LLMValidatorAgent(LLMAgent):
             )
             
         except Exception as e:
-            # Try fallback if enabled
-            if self.config.get('fallback_to_heuristic', True) and self.config.get('llm_only_mode', False):
-                return self._process_with_fallback_agent(prompt, context, history, feedback, str(e))
+            # Log the validation error
+            session_id = context.get('session_id') if context else None
+            iteration = len(history) + 1 if history else 1
             
-            return AgentResult(
-                agent_name=self.name,
-                success=False,
-                analysis={},
-                suggestions=[],
-                confidence_score=0.0,
-                error_message=f"LLM validation failed: {str(e)}"
+            self.llm_logger.log_error(
+                'validation_process_error',
+                f"Validation process failed: {str(e)}",
+                {
+                    'session_id': session_id,
+                    'iteration': iteration,
+                    'prompt_length': len(prompt),
+                    'has_context': context is not None,
+                    'has_history': history is not None and len(history) > 0,
+                    'has_feedback': feedback is not None
+                },
+                e
             )
+            
+            # Handle the exception by raising it with detailed context
+            self._handle_llm_failure(prompt, context, history, feedback, str(e))
     
     def _get_base_system_prompt(self) -> str:
         """Get the base system prompt for LLM validation."""
@@ -414,7 +503,7 @@ Provide detailed reasoning for all assessments and clear justification for pass/
         
         # Look for critical issues section
         critical_section_match = re.search(
-            r'CRITICAL ISSUES[:\s]*\n(.*?)(?=\n\n|\nRECOMMENDATIONS|\nCONFIDENCE|\Z)',
+            r'CRITICAL ISSUES[:\s]*\n(.*?)(?=\nRECOMMENDATIONS|\nCONFIDENCE|\Z)',
             response,
             re.DOTALL | re.IGNORECASE
         )
@@ -508,7 +597,7 @@ Provide detailed reasoning for all assessments and clear justification for pass/
         raw_response = parsed_response['raw_response']
         
         recommendations_match = re.search(
-            r'RECOMMENDATIONS[:\s]*\n(.*?)(?=\n\n|\nCONFIDENCE|\Z)',
+            r'RECOMMENDATIONS[:\s]*\n(.*?)(?=\nCONFIDENCE|\Z)',
             raw_response,
             re.DOTALL | re.IGNORECASE
         )
@@ -626,3 +715,229 @@ Provide detailed reasoning for all assessments and clear justification for pass/
             'compliance_level': compliance_level,
             'passes_best_practices': best_practices_result.get('passes', False)
         }
+    
+    def _log_validation_criteria_evaluation(self, 
+                                          validation_results: Dict[str, Any],
+                                          session_id: Optional[str],
+                                          iteration: int) -> None:
+        """Log detailed validation criteria evaluation results."""
+        criteria_results = {}
+        
+        for criterion in ['syntax', 'logic', 'completeness', 'quality', 'best_practices']:
+            if criterion in validation_results:
+                result = validation_results[criterion]
+                criteria_results[criterion] = {
+                    'status': result.get('status', 'UNKNOWN'),
+                    'score': result.get('score', 0.0),
+                    'passes': result.get('passes', False)
+                }
+        
+        # Log critical issues identification
+        critical_issues = validation_results.get('critical_issues', [])
+        critical_issues_count = len([issue for issue in critical_issues if issue.strip()])
+        
+        self.llm_logger.log_agent_reasoning(
+            'validation_criteria_evaluation',
+            f"Evaluated {len(criteria_results)} validation criteria. "
+            f"Identified {critical_issues_count} critical issues. "
+            f"Criteria results: {criteria_results}",
+            {
+                'criteria_results': criteria_results,
+                'critical_issues_count': critical_issues_count,
+                'critical_issues': critical_issues[:3],  # Log first 3 issues
+                'session_id': session_id,
+                'iteration': iteration,
+                'overall_score': validation_results.get('overall', {}).get('score', 0.0)
+            }
+        )
+        
+        # Log each criterion evaluation separately for detailed tracking
+        for criterion, result in criteria_results.items():
+            self.llm_logger.log_component_extraction(
+                f'validation_criterion_{criterion}',
+                result,
+                result['passes'],
+                'llm_response_parsing',
+                result['score']
+            )
+    
+    def _log_validation_status_determination(self, 
+                                           validation_results: Dict[str, Any],
+                                           passes_validation: bool,
+                                           session_id: Optional[str],
+                                           iteration: int) -> None:
+        """Log detailed validation status determination process."""
+        overall_score = validation_results.get('overall', {}).get('score', 0.0)
+        critical_issues_count = len(validation_results.get('critical_issues', []))
+        
+        # Count passed/failed criteria
+        passed_criteria = []
+        failed_criteria = []
+        
+        for criterion in ['syntax', 'logic', 'completeness', 'quality', 'best_practices']:
+            if criterion in validation_results:
+                if validation_results[criterion].get('passes', False):
+                    passed_criteria.append(criterion)
+                else:
+                    failed_criteria.append(criterion)
+        
+        determination_reasoning = (
+            f"Validation status determination: {'PASS' if passes_validation else 'FAIL'}. "
+            f"Overall score: {overall_score:.3f} (threshold: {self.min_quality_threshold}). "
+            f"Critical issues: {critical_issues_count}. "
+            f"Passed criteria: {passed_criteria}. "
+            f"Failed criteria: {failed_criteria}. "
+            f"Strictness level: {self.validation_strictness}"
+        )
+        
+        self.llm_logger.log_agent_reasoning(
+            'validation_status_determination',
+            determination_reasoning,
+            {
+                'passes_validation': passes_validation,
+                'overall_score': overall_score,
+                'quality_threshold': self.min_quality_threshold,
+                'critical_issues_count': critical_issues_count,
+                'passed_criteria_count': len(passed_criteria),
+                'failed_criteria_count': len(failed_criteria),
+                'passed_criteria': passed_criteria,
+                'failed_criteria': failed_criteria,
+                'strictness_level': self.validation_strictness,
+                'session_id': session_id,
+                'iteration': iteration
+            }
+        )
+    
+    def _log_quality_assessment(self, 
+                              quality_assessment: Dict[str, Any],
+                              session_id: Optional[str],
+                              iteration: int) -> None:
+        """Log comprehensive quality assessment results."""
+        assessment_summary = (
+            f"Quality assessment completed. "
+            f"Overall score: {quality_assessment.get('overall_score', 0.0):.3f}, "
+            f"Quality level: {quality_assessment.get('quality_level', 'Unknown')}, "
+            f"Average score: {quality_assessment.get('average_score', 0.0):.3f}, "
+            f"Score range: {quality_assessment.get('minimum_score', 0.0):.3f} - "
+            f"{quality_assessment.get('maximum_score', 0.0):.3f}, "
+            f"Consistency: {quality_assessment.get('score_consistency', 0.0):.3f}"
+        )
+        
+        self.llm_logger.log_agent_reasoning(
+            'quality_assessment',
+            assessment_summary,
+            {
+                'quality_assessment': quality_assessment,
+                'session_id': session_id,
+                'iteration': iteration
+            }
+        )
+        
+        # Log quality assessment as component extraction
+        self.llm_logger.log_component_extraction(
+            'quality_assessment_metrics',
+            quality_assessment,
+            quality_assessment.get('overall_score', 0.0) > 0,
+            'comprehensive_analysis',
+            quality_assessment.get('overall_score', 0.0)
+        )
+    
+    def _log_best_practices_compliance(self, 
+                                     compliance_assessment: Dict[str, Any],
+                                     session_id: Optional[str],
+                                     iteration: int) -> None:
+        """Log best practices compliance assessment results."""
+        compliance_summary = (
+            f"Best practices compliance assessment completed. "
+            f"Compliance score: {compliance_assessment.get('compliance_score', 0.0):.3f}, "
+            f"Compliance level: {compliance_assessment.get('compliance_level', 'Unknown')}, "
+            f"Status: {compliance_assessment.get('compliance_status', 'UNKNOWN')}, "
+            f"Passes best practices: {compliance_assessment.get('passes_best_practices', False)}"
+        )
+        
+        self.llm_logger.log_agent_reasoning(
+            'best_practices_compliance',
+            compliance_summary,
+            {
+                'compliance_assessment': compliance_assessment,
+                'session_id': session_id,
+                'iteration': iteration
+            }
+        )
+        
+        # Log compliance assessment as component extraction
+        self.llm_logger.log_component_extraction(
+            'best_practices_compliance_metrics',
+            compliance_assessment,
+            compliance_assessment.get('passes_best_practices', False),
+            'compliance_analysis',
+            compliance_assessment.get('compliance_score', 0.0)
+        )
+    
+    def _log_validation_reasoning_and_results(self, 
+                                            parsed_response: Dict[str, Any],
+                                            validation_results: Dict[str, Any],
+                                            passes_validation: bool,
+                                            quality_assessment: Dict[str, Any],
+                                            best_practices_compliance: Dict[str, Any],
+                                            session_id: Optional[str],
+                                            iteration: int) -> None:
+        """Log comprehensive validation reasoning and assessment results."""
+        
+        # Extract and log detailed reasoning from LLM response
+        llm_reasoning = parsed_response.get('reasoning', '')
+        if llm_reasoning:
+            self.llm_logger.log_agent_reasoning(
+                'llm_validation_reasoning',
+                llm_reasoning,
+                {
+                    'reasoning_source': 'llm_response',
+                    'session_id': session_id,
+                    'iteration': iteration
+                }
+            )
+        
+        # Log detailed reasoning for each criterion
+        detailed_reasoning = validation_results.get('detailed_reasoning', {})
+        for criterion, reasoning in detailed_reasoning.items():
+            if reasoning and reasoning.strip():
+                self.llm_logger.log_agent_reasoning(
+                    f'validation_reasoning_{criterion}',
+                    reasoning,
+                    {
+                        'criterion': criterion,
+                        'criterion_score': validation_results.get(criterion, {}).get('score', 0.0),
+                        'criterion_passes': validation_results.get(criterion, {}).get('passes', False),
+                        'session_id': session_id,
+                        'iteration': iteration
+                    }
+                )
+        
+        # Log comprehensive validation results summary
+        results_summary = (
+            f"Validation assessment completed for prompt (length: {len(parsed_response.get('raw_response', ''))//10}0 chars). "
+            f"Final result: {'PASS' if passes_validation else 'FAIL'}. "
+            f"Overall quality score: {quality_assessment.get('overall_score', 0.0):.3f} "
+            f"({quality_assessment.get('quality_level', 'Unknown')} quality). "
+            f"Best practices compliance: {best_practices_compliance.get('compliance_level', 'Unknown')} "
+            f"({best_practices_compliance.get('compliance_score', 0.0):.3f}). "
+            f"Critical issues identified: {len(validation_results.get('critical_issues', []))}. "
+            f"Validation criteria evaluated: {len([c for c in ['syntax', 'logic', 'completeness', 'quality', 'best_practices'] if c in validation_results])}/5"
+        )
+        
+        self.llm_logger.log_agent_reasoning(
+            'validation_assessment_results',
+            results_summary,
+            {
+                'validation_results': {
+                    'passes_validation': passes_validation,
+                    'overall_score': validation_results.get('overall', {}).get('score', 0.0),
+                    'quality_level': quality_assessment.get('quality_level', 'Unknown'),
+                    'compliance_level': best_practices_compliance.get('compliance_level', 'Unknown'),
+                    'critical_issues_count': len(validation_results.get('critical_issues', [])),
+                    'criteria_evaluated': len([c for c in ['syntax', 'logic', 'completeness', 'quality', 'best_practices'] if c in validation_results])
+                },
+                'session_id': session_id,
+                'iteration': iteration
+            }
+        )
