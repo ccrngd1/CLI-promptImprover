@@ -45,6 +45,20 @@ class CLIFormatter:
         self.console = Console() if RICH_AVAILABLE else None
         self.use_rich = RICH_AVAILABLE
     
+    def escape_rich_markup(self, text: str) -> str:
+        """
+        Escape Rich markup characters in text to prevent parsing errors.
+        
+        Args:
+            text: Text that may contain Rich markup characters
+            
+        Returns:
+            Text with Rich markup characters escaped
+        """
+        if not text:
+            return text
+        return text.replace('[', '\\[').replace(']', '\\]')
+    
     def print(self, text: str, style: Optional[str] = None):
         """Print text with optional styling."""
         if self.use_rich and self.console:
@@ -55,7 +69,10 @@ class CLIFormatter:
     def print_panel(self, content: str, title: str, style: str = "blue"):
         """Print content in a panel."""
         if self.use_rich and self.console:
-            self.console.print(Panel(content, title=title, border_style=style))
+            # Escape Rich markup in content and title to prevent parsing errors
+            escaped_content = self.escape_rich_markup(content)
+            escaped_title = self.escape_rich_markup(title)
+            self.console.print(Panel(escaped_content, title=escaped_title, border_style=style))
         else:
             print(f"\n=== {title} ===")
             print(content)
@@ -93,7 +110,9 @@ class CLIFormatter:
         
         if self.use_rich and self.console:
             syntax = Syntax(json_str, "json", theme="monokai", line_numbers=True)
-            self.console.print(Panel(syntax, title=title))
+            # Escape Rich markup in title to prevent parsing errors
+            escaped_title = self.escape_rich_markup(title)
+            self.console.print(Panel(syntax, title=escaped_title))
         else:
             print(f"\n{title}:")
             print(json_str)
@@ -110,7 +129,9 @@ class CLIFormatter:
         if 'agent_results' in orchestration_result:
             agents_branch = tree.add("🤖 Agent Results")
             for agent_name, result in orchestration_result['agent_results'].items():
-                agent_branch = agents_branch.add(f"[bold]{agent_name.title()}[/bold]")
+                # Escape Rich markup in agent name to prevent parsing errors
+                escaped_agent_name = self.escape_rich_markup(agent_name.title())
+                agent_branch = agents_branch.add(f"[bold]{escaped_agent_name}[/bold]")
                 agent_branch.add(f"✅ Success: {result.get('success', False)}")
                 agent_branch.add(f"🎯 Confidence: {result.get('confidence_score', 0):.2f}")
                 
@@ -127,7 +148,9 @@ class CLIFormatter:
                         if raw_response:
                             llm_branch = agent_branch.add("🧠 Raw LLM Feedback")
                             # Show full response without truncation
-                            llm_branch.add(f"[dim]{raw_response}[/dim]")
+                            # Escape Rich markup in the response to prevent parsing errors
+                            escaped_response = self.escape_rich_markup(raw_response)
+                            llm_branch.add(f"[dim]{escaped_response}[/dim]")
                             
                             # Show model and token usage
                             if llm_data.get('model_used'):
@@ -138,19 +161,26 @@ class CLIFormatter:
                 if result.get('suggestions'):
                     suggestions_branch = agent_branch.add("💡 Suggestions")
                     for suggestion in result['suggestions'][:3]:
-                        suggestions_branch.add(f"• {suggestion}")
+                        # Escape Rich markup in suggestions to prevent parsing errors
+                        escaped_suggestion = self.escape_rich_markup(suggestion)
+                        suggestions_branch.add(f"• {escaped_suggestion}")
         
         # Orchestration decisions
         if 'orchestration_decisions' in orchestration_result:
             decisions_branch = tree.add("🎯 Orchestration Decisions")
             for decision in orchestration_result['orchestration_decisions']:
-                decisions_branch.add(f"• {decision}")
+                # Escape Rich markup in decisions to prevent parsing errors
+                escaped_decision = self.escape_rich_markup(decision)
+                decisions_branch.add(f"• {escaped_decision}")
         
         # Conflict resolutions
         if 'conflict_resolutions' in orchestration_result:
             conflicts_branch = tree.add("⚖️ Conflict Resolutions")
             for conflict in orchestration_result['conflict_resolutions']:
-                conflicts_branch.add(f"• {conflict.get('description', str(conflict))}")
+                # Escape Rich markup in conflict descriptions to prevent parsing errors
+                conflict_desc = conflict.get('description', str(conflict))
+                escaped_conflict = self.escape_rich_markup(conflict_desc)
+                conflicts_branch.add(f"• {escaped_conflict}")
         
         # Performance metrics
         metrics_branch = tree.add("📊 Performance")
@@ -256,6 +286,45 @@ class PromptOptimizerCLI:
             orchestration_config=orchestration_config,
             full_config=config  # Pass full config to ensure optimization settings are available
         )
+    
+    def _apply_early_logging_suppression(self):
+        """Apply early logging suppression based on config to prevent INFO messages during initialization."""
+        try:
+            import logging
+            
+            # Get the configured log level
+            if self.config_loader:
+                config = self.config_loader.get_config()
+                log_level = config.get('logging', {}).get('level', 'INFO')
+            else:
+                log_level = 'INFO'
+            
+            # Convert to numeric level
+            numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+            
+            # If the configured level is ERROR, suppress INFO messages immediately
+            if numeric_level >= logging.ERROR:
+                # Set root logger to ERROR
+                root_logger = logging.getLogger()
+                root_logger.setLevel(logging.ERROR)
+                
+                # Suppress all application loggers
+                app_loggers = [
+                    'bedrock.executor', 'orchestration', 'agent_factory', 'agents',
+                    'session', 'evaluation', 'storage', 'cli', 'llm_agents',
+                    'llm_agents.llmanalyzeragent', 'llm_agents.llmrefineragent', 
+                    'llm_agents.llmvalidatoragent'
+                ]
+                
+                for logger_name in app_loggers:
+                    logger = logging.getLogger(logger_name)
+                    logger.setLevel(logging.ERROR)
+                    # Prevent propagation to avoid duplicate suppression
+                    logger.propagate = False
+                    
+        except Exception as e:
+            # If early suppression fails, continue without it
+            pass
     
     def _ensure_components_initialized(self):
         """Ensure components are initialized, initializing them if needed."""
@@ -363,6 +432,9 @@ Examples:
             self.config_manager = ConfigManager(parsed_args.config)
             # Reset components initialization flag to force reinitialization with new config
             self._components_initialized = False
+            
+            # Apply logging configuration immediately to suppress early messages
+            self._apply_early_logging_suppression()
         
         # Route to appropriate command handler
         if not parsed_args.command:

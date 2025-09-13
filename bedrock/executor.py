@@ -11,6 +11,20 @@ import time
 import logging
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
+
+# Suppress AWS SDK logging before importing boto3
+logging.getLogger('boto3').setLevel(logging.ERROR)
+logging.getLogger('botocore').setLevel(logging.ERROR)
+logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
+logging.getLogger('botocore.utils').setLevel(logging.ERROR)
+logging.getLogger('botocore.hooks').setLevel(logging.ERROR)
+logging.getLogger('botocore.loaders').setLevel(logging.ERROR)
+logging.getLogger('botocore.client').setLevel(logging.ERROR)
+logging.getLogger('botocore.endpoint').setLevel(logging.ERROR)
+logging.getLogger('botocore.retryhandler').setLevel(logging.ERROR)
+logging.getLogger('botocore.parsers').setLevel(logging.ERROR)
+logging.getLogger('urllib3').setLevel(logging.ERROR)
+
 import boto3
 from botocore.exceptions import ClientError, BotoCoreError
 from botocore.config import Config

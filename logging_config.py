@@ -751,6 +751,60 @@ def setup_logging(log_level: str = 'INFO',
         existing_logger = logging.getLogger(logger_name)
         existing_logger.setLevel(numeric_level)
     
+    # Specifically handle application loggers that might be created early
+    app_loggers = [
+        'bedrock.executor', 'orchestration', 'agent_factory', 'agents',
+        'session', 'evaluation', 'storage', 'cli'
+    ]
+    
+    for logger_name in app_loggers:
+        app_logger = logging.getLogger(logger_name)
+        app_logger.setLevel(numeric_level)
+    
+    # Configure third-party loggers to respect our logging level
+    # AWS SDK loggers - be more aggressive about suppressing them
+    aws_loggers = [
+        'boto3', 'botocore', 'botocore.credentials', 'botocore.utils', 
+        'botocore.hooks', 'botocore.loaders', 'botocore.client', 
+        'botocore.endpoint', 'botocore.retryhandler', 'botocore.parsers',
+        'urllib3', 'urllib3.connectionpool', 'botocore.awsrequest',
+        'botocore.httpsession', 'botocore.auth', 'botocore.regions'
+    ]
+    
+    # Set a minimum level for AWS loggers - never below WARNING
+    aws_min_level = max(numeric_level, logging.WARNING)
+    
+    for logger_name in aws_loggers:
+        aws_logger = logging.getLogger(logger_name)
+        aws_logger.setLevel(aws_min_level)
+        # Remove any existing handlers that might be logging at lower levels
+        for handler in aws_logger.handlers[:]:
+            aws_logger.removeHandler(handler)
+        # Prevent propagation to root logger to avoid duplicate messages
+        aws_logger.propagate = False
+    
+    # Set up a comprehensive filter to catch unwanted messages
+    class LogLevelFilter(logging.Filter):
+        def __init__(self, min_level):
+            super().__init__()
+            self.min_level = min_level
+        
+        def filter(self, record):
+            # Always suppress INFO and DEBUG messages from AWS SDK components
+            if (record.name.startswith(('boto3', 'botocore', 'urllib3')) and 
+                record.levelno < logging.WARNING):
+                return False
+            
+            # For application loggers, respect the configured minimum level
+            if record.levelno < self.min_level:
+                return False
+                
+            return True
+    
+    # Add the filter to the root logger and console handler
+    log_filter = LogLevelFilter(numeric_level)
+    root_logger.addFilter(log_filter)
+    
     # Clear existing handlers
     root_logger.handlers.clear()
     
@@ -766,6 +820,7 @@ def setup_logging(log_level: str = 'INFO',
         )
     
     console_handler.setFormatter(console_formatter)
+    console_handler.addFilter(log_filter)  # Apply filter to console handler too
     root_logger.addHandler(console_handler)
     
     # File handlers if log directory specified

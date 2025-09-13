@@ -6,8 +6,8 @@ using LLM-powered collaboration, intelligent orchestration, and embedded best pr
 """
 
 __version__ = "1.0.0"
-__author__ = "Bedrock Prompt Optimizer Team"
-__email__ = "support@example.com"
+__author__ = "ccrngd1"
+__email__ = ""
 __description__ = "Multi-agent system for optimizing prompts for Amazon Bedrock"
 
 from models import PromptIteration, ExecutionResult, EvaluationResult, UserFeedback

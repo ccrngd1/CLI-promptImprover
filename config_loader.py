@@ -355,6 +355,29 @@ class ConfigurationLoader:
             root_logger = logging.getLogger()
             root_logger.setLevel(logging.ERROR)
             
+            # Immediately suppress AWS SDK loggers to prevent early INFO messages
+            aws_loggers = [
+                'boto3', 'botocore', 'botocore.credentials', 'botocore.utils', 
+                'botocore.hooks', 'botocore.loaders', 'botocore.client', 
+                'botocore.endpoint', 'botocore.retryhandler', 'botocore.parsers',
+                'urllib3', 'urllib3.connectionpool', 'botocore.awsrequest',
+                'botocore.httpsession', 'botocore.auth', 'botocore.regions'
+            ]
+            
+            for logger_name in aws_loggers:
+                logging.getLogger(logger_name).setLevel(logging.ERROR)
+            
+            # Also suppress application loggers that might be created early
+            app_loggers = [
+                'bedrock.executor', 'orchestration', 'agent_factory', 'agents',
+                'session', 'evaluation', 'storage', 'cli', 'llm_agents',
+                'llm_agents.llmanalyzeragent', 'llm_agents.llmrefineragent', 
+                'llm_agents.llmvalidatoragent'
+            ]
+            
+            for logger_name in app_loggers:
+                logging.getLogger(logger_name).setLevel(logging.ERROR)
+            
             # Lazy import to avoid circular dependencies
             from logging_config import setup_logging
             
